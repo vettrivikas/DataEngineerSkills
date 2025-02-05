@@ -1,40 +1,29 @@
 import json
 
-
 def load_json(file_path):
     with open(file_path, 'r') as f:
         return json.load(f)
 
+def merge_json(preprd, pre_prod):
+    # Start with preprd.json data
+    prod_new = preprd.copy()
 
-def compare_json(pre_prod, preprd):
-    missing_keys = []
-    mismatched_values = {}
-
-    for key in pre_prod:
-        if key not in preprd:
-            missing_keys.append(key)
-        elif pre_prod[key] != preprd[key]:
-            mismatched_values[key] = {'pre_prod': pre_prod[key], 'preprd': preprd[key]}
-
-    return missing_keys, mismatched_values
-
+    # Add missing keys from pre_prod.json
+    for key, value in pre_prod.items():
+        if key not in prod_new:
+            prod_new[key] = value
+    
+    return prod_new
 
 # Load JSON files
-pre_prod_json = load_json("pre_prod.json")
 preprd_json = load_json("preprd.json")
+pre_prod_json = load_json("pre_prod.json")
 
-# Compare
-missing_keys, mismatched_values = compare_json(pre_prod_json, preprd_json)
+# Merge JSON
+prod_new_json = merge_json(preprd_json, pre_prod_json)
 
-# Print results
-if missing_keys:
-    print("Missing keys in preprd.json:", missing_keys)
-else:
-    print("No missing keys.")
+# Save to prod_new.json
+with open("prod_new.json", "w") as f:
+    json.dump(prod_new_json, f, indent=4)
 
-if mismatched_values:
-    print("Mismatched values:")
-    for key, values in mismatched_values.items():
-        print(f"  {key}: pre_prod -> {values['pre_prod']}, preprd -> {values['preprd']}")
-else:
-    print("No value mismatches.")
+print("prod_new.json has been created successfully!")
