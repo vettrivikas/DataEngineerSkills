@@ -1,4 +1,5 @@
 import json
+import re
 
 # Input and output file paths
 json_file_path = 'data.json'         # Your input JSON file
@@ -22,14 +23,27 @@ values_list = []
 for record in records:
     row = []
     for col in columns:
-        val = record[col]
-        if val is None:
+        val = record.get(col)
+        
+        # Handle 'temppp' column specifically
+        if col == 'temppp' and isinstance(val, str):
+            val = val.strip()
+            if not re.match(r'^[a-zA-Z0-9]+$', val):  # Has special characters
+                val = f'"{val}"'
+            else:
+                val = f"'{val}'"
+            row.append(val)
+        
+        elif val is None or val == "":
             row.append("NULL")
+        
         elif isinstance(val, str):
             val = val.replace("'", "''")  # Escape single quotes
             row.append(f"'{val}'")
+        
         else:
             row.append(str(val))
+    
     values_list.append(f"({', '.join(row)})")
 
 # Join all values into a single query
