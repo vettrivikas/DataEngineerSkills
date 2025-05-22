@@ -2,11 +2,10 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from datetime import datetime
 import redshift_connector
-import pandas as pd
 import boto3
 from io import StringIO
+import csv
 
-# Function to export data from Redshift and upload to S3
 def export_redshift_to_s3():
     # Connect to Redshift
     conn = redshift_connector.connect(
@@ -16,24 +15,28 @@ def export_redshift_to_s3():
         password='your_password',
         port=5439
     )
-    query = "SELECT * FROM your_schema.your_table"
-    df = pd.read_sql(query, conn)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM your_schema.your_table")
+    rows = cursor.fetchall()
+    headers = [desc[0] for desc in cursor.description]
     conn.close()
 
-    # Convert DataFrame to CSV in memory
+    # Write to CSV with | delimiter
     csv_buffer = StringIO()
-    df.to_csv(csv_buffer, index=False)
+    writer = csv.writer(csv_buffer, delimiter='|', quoting=csv.QUOTE_MINIMAL)
+    writer.writerow(headers)
+    writer.writerows(rows)
 
     # Upload to S3
     s3 = boto3.client('s3')
     s3.put_object(
         Bucket='your-s3-bucket',
-        Key='your-folder/table_export.csv',
+        Key='your-folder/exported_data_pipe_delimited.csv',
         Body=csv_buffer.getvalue()
     )
-    print("✅ Export complete")
+    print("✅ Exported with '|' delimiter")
 
-# Define DAG
+# Airflow DAG
 default_args = {
     'owner': 'airflow',
     'start_date': datetime(2024, 1, 1),
@@ -41,14 +44,14 @@ default_args = {
 }
 
 with DAG(
-    dag_id='export_redshift_to_s3',
+    dag_id='redshift_export_pipe_delim',
     default_args=default_args,
     schedule_interval=None,
     catchup=False
 ) as dag:
 
     export_task = PythonOperator(
-        task_id='export_data',
+        task_id='export_redshift_to_s3',
         python_callable=export_redshift_to_s3
     )
 
