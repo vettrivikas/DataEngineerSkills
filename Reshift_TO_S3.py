@@ -1,58 +1,59 @@
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from datetime import datetime
-import redshift_connector
 import boto3
-from io import StringIO
+import redshift_connector
 import csv
+from io import StringIO
 
-def export_redshift_to_s3():
-    # Connect to Redshift
-    conn = redshift_connector.connect(
-        host='your-redshift-cluster.amazonaws.com',
-        database='your_db',
-        user='your_user',
-        password='your_password',
-        port=5439
-    )
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM your_schema.your_table")
-    rows = cursor.fetchall()
-    headers = [desc[0] for desc in cursor.description]
-    conn.close()
-
-    # Write to CSV with | delimiter
-    csv_buffer = StringIO()
-    writer = csv.writer(csv_buffer, delimiter='|', quoting=csv.QUOTE_MINIMAL)
-    writer.writerow(headers)
-    writer.writerows(rows)
-
-    # Upload to S3
-    s3 = boto3.client('s3')
-    s3.put_object(
-        Bucket='your-s3-bucket',
-        Key='your-folder/exported_data_pipe_delimited.csv',
-        Body=csv_buffer.getvalue()
-    )
-    print("✅ Exported with '|' delimiter")
-
-# Airflow DAG
-default_args = {
-    'owner': 'airflow',
-    'start_date': datetime(2024, 1, 1),
-    'retries': 1
+# S3 and Redshift configs
+s3_bucket = 'your-s3-bucket'
+s3_key = 'your-folder/exported_data_pipe_delimited.csv'
+redshift_config = {
+    'host': 'your-redshift-cluster.amazonaws.com',
+    'database': 'your_db',
+    'user': 'your_user',
+    'password': 'your_password',
+    'port': 5439,
+    'table': 'your_schema.your_table'
 }
 
-with DAG(
-    dag_id='redshift_export_pipe_delim',
-    default_args=default_args,
-    schedule_interval=None,
-    catchup=False
-) as dag:
+# Step 1: Read CSV from S3
+s3 = boto3.client('s3')
+response = s3.get_object(Bucket=s3_bucket, Key=s3_key)
+csv_content = response['Body'].read().decode('utf-8')
 
-    export_task = PythonOperator(
-        task_id='export_redshift_to_s3',
-        python_callable=export_redshift_to_s3
-    )
+# Step 2: Parse CSV
+csv_buffer = StringIO(csv_content)
+reader = csv.reader(csv_buffer, delimiter='|')
+header = next(reader)  # first row = column names
 
-    export_task
+# Step 3: Prepare insert statements
+rows = []
+for row in reader:
+    formatted = []
+    for value in row:
+        if value == '':
+            formatted.append("NULL")
+        else:
+            value = value.replace("'", "''")  # escape single quotes
+            formatted.append(f"'{value}'")
+    rows.append(f"({', '.join(formatted)})")
+
+# Chunk insert into batches (optional)
+insert_query = f"""
+    INSERT INTO {redshift_config['table']} ({', '.join(header)})
+    VALUES {',\n'.join(rows)};
+"""
+
+# Step 4: Load into Redshift
+conn = redshift_connector.connect(
+    host=redshift_config['host'],
+    database=redshift_config['database'],
+    user=redshift_config['user'],
+    password=redshift_config['password'],
+    port=redshift_config['port']
+)
+cursor = conn.cursor()
+cursor.execute(insert_query)
+conn.commit()
+conn.close()
+
+print("✅ Data loaded into Redshift successfully.")
