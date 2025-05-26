@@ -11,3 +11,14 @@ WHERE
     o.s4_pfty_cntr IS DISTINCT FROM n.s4_pfty_cntr OR
     o.ftp_component IS DISTINCT FROM n.ftp_component OR
     o.ftp_bal_amount IS DISTINCT FROM n.ftp_bal_amount;
+
+
+CREATE OR REPLACE FUNCTION get_user_age(user_id INT)
+RETURNS INT
+IMMUTABLE
+AS $$
+  SELECT age
+  FROM users
+  WHERE id = user_id;
+$$ LANGUAGE SQL;
+
