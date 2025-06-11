@@ -57,3 +57,4 @@ conn.commit()
 conn.close()
 
 print("✅ Data loaded into Redshift successfully.")
+#redshift_engine = create_engine("postgresql+psycopg2://%s:%s@%s:%d/%s" % (redshift_user,redshift_password,redshift_host,redshift_port,redshift_db))
