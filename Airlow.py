@@ -2,6 +2,7 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.utils.dates import days_ago
 import boto3
+##pip download SQLAlchemy==1.4.49 --only-binary=:all: --platform manylinux2014_x86_64 --python-version 3.7 --implementation cp --abi cp37 --dest .
 
 def copy_s3_folder(**kwargs):
     source_prefix = kwargs['dag_run'].conf.get('source_key')  # e.g., "fb/jn/"
