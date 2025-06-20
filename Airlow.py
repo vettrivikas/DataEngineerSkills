@@ -7,8 +7,15 @@ def generic_s3_copy(**kwargs):
     s3 = boto3.client('s3')
 
     bucket = kwargs['dag_run'].conf.get('bucket_name')
-    source_keys = kwargs['dag_run'].conf.get('source_keys', [])
-    dest_keys = kwargs['dag_run'].conf.get('dest_keys', [])
+    src_raw = kwargs['dag_run'].conf.get('source_keys')
+    dst_raw = kwargs['dag_run'].conf.get('dest_keys')
+
+    # Normalize to lists
+    source_keys = [src_raw] if isinstance(src_raw, str) else src_raw
+    dest_keys = [dst_raw] if isinstance(dst_raw, str) else dst_raw
+
+    if not (source_keys and dest_keys) or len(source_keys) != len(dest_keys):
+        raise ValueError("source_keys and dest_keys must be non-empty and of equal length")
 
     for src, dst in zip(source_keys, dest_keys):
         if not src.endswith('/'):
