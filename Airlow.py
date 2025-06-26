@@ -2,6 +2,7 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.utils.dates import days_ago
 import boto3
+#="{""sourcekey"": [" & TEXTJOIN(", ", TRUE, """" & A2:A11 & """") & "]}"
 
 def generic_s3_copy(**kwargs):
     s3 = boto3.client('s3')
