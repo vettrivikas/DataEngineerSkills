@@ -1,0 +1,52 @@
+service: data-quality-dashboard
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+  
+  environment:
+    PGHOST: ${env:PGHOST}
+    PGPORT: ${env:PGPORT}
+    PGDATABASE: ${env:PGDATABASE}
+    PGUSER: ${env:PGUSER}
+    PGPASSWORD: ${env:PGPASSWORD}
+    SESSION_SECRET: ${env:SESSION_SECRET}
+    FLASK_DEBUG: false
+    LOG_LEVEL: INFO
+    
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - rds:DescribeDBInstances
+        - logs:CreateLogGroup
+        - logs:CreateLogStream
+        - logs:PutLogEvents
+      Resource: "*"
+
+functions:
+  app:
+    handler: wsgi_handler.handler
+    events:
+      - http: ANY /
+      - http: 'ANY {proxy+}'
+    timeout: 30
+    memorySize: 1024
+    environment:
+      PYTHONPATH: "/var/runtime:/var/task"
+
+plugins:
+  - serverless-wsgi
+  - serverless-python-requirements
+
+custom:
+  wsgi:
+    app: main.app
+    packRequirements: false
+  pythonRequirements:
+    dockerizePip: non-linux
+    slim: true
+    strip: false
+    noDeps: false
+    fileName: requirements.txt

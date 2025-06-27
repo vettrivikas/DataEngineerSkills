@@ -1,0 +1,87 @@
+Build a simple, secure web application using Python (Flask) and HTML/CSS/JS to display a Data Quality Dashboard for Redshift data. The app will be hosted and run on Replit.com, so keep dependencies minimal.
+✅ App Features:
+
+    Credential Input / Config Support
+
+        Accept Redshift credentials via environment variables or a secure config (config.json) including:
+        host, port, database, user, password
+
+        Use psycopg2 or sqlalchemy to connect to Redshift.
+
+    Schema & Table Explorer
+
+        Query and list all available schemas and tables in Redshift.
+
+        Allow users to select a specific schema and table from dropdowns.
+
+    Data Quality Dashboard
+    For each selected table:
+
+        Show data quality metrics for the following dimensions:
+
+            Completeness: % non-null values in required fields
+
+            Timeliness: Presence of recent records based on a date column
+
+            Accuracy: Check if numerical values fall within expected ranges (e.g., credit_score 300–900)
+
+            Consistency: Cross-check related fields (e.g., currency codes are valid ISO codes)
+
+            Uniqueness: % of unique values in key columns (e.g., customer_id)
+
+        All dimensions should show percentage score per column (e.g., customer_id = 97% completeness).
+
+    Critical Data Element (CDE) Focus
+
+        Highlight metrics only for CDE fields relevant to Bank of Canada use case:
+        customer_id, credit_score, transaction_amount, regulatory_flag, account_status
+
+        This helps regulatory reporting and risk monitoring.
+
+    KPI Summary Section
+
+        Display a summary of each data quality dimension as a colored score card or bar chart:
+
+            Green: ≥ 70%, Yellow: 40–70%, Red: < 40%
+
+        Sample input:
+
+            Completeness: 71%
+            Timeliness: 74%
+            Accuracy: 52%
+            Consistency: 31%
+
+            Missing values (like Validity or Uniqueness) should be shown as "Not Available".
+
+        Config-Driven Source/Target Mapping
+
+            Load a file from S3 with lines in this format:
+            source_prefix|filename or *|target_prefix
+
+            Combine run_date (passed from user or URL param) with each prefix to form source/target paths.
+
+        Nice UI
+
+            Use basic HTML + Bootstrap or Tailwind for layout.
+
+            Use Chart.js or Plotly to show charts.
+
+            Include filters for schema, table, and run_date.
+
+        Modular Design
+
+            Separate backend (data checks) from frontend (rendering).
+
+            Keep code clean and easily extendable for new quality checks.
+
+✅ Bonus Replit Tips
+
+    Create a requirements.txt with:
+
+flask
+psycopg2-binary
+boto3
+pandas
+plotly
+
+Use .env file or UI secrets panel in Replit to store Redshift credentials.

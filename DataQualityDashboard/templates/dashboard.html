@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <!-- Connection Status -->
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">
+                    <i class="fas fa-plug me-2"></i>
+                    Database Connection Status
+                </h5>
+                {% if connection_status %}
+                    <div class="alert alert-success mb-0">
+                        <i class="fas fa-check-circle me-2"></i>
+                        Connected to Redshift successfully
+                    </div>
+                {% else %}
+                    <div class="alert alert-danger mb-0">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        Connection failed: {{ connection_message }}
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    {% if connection_status %}
+    <!-- Schema and Table Selection -->
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">
+                    <i class="fas fa-database me-2"></i>
+                    Schema & Table Explorer
+                </h5>
+                
+                <form id="tableSelectForm" class="row g-3">
+                    <div class="col-md-4">
+                        <label for="schemaSelect" class="form-label">Schema</label>
+                        <select id="schemaSelect" class="form-select" required>
+                            <option value="">Select Schema...</option>
+                            {% for schema in schemas %}
+                                <option value="{{ schema.schema_name }}">
+                                    {{ schema.schema_name }} ({{ schema.table_count }} tables)
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    
+                    <div class="col-md-4">
+                        <label for="tableSelect" class="form-label">Table</label>
+                        <select id="tableSelect" class="form-select" required disabled>
+                            <option value="">Select Table...</option>
+                        </select>
+                    </div>
+                    
+                    <div class="col-md-3">
+                        <label for="runDate" class="form-label">Run Date</label>
+                        <input type="date" id="runDate" class="form-control">
+                    </div>
+                    
+                    <div class="col-md-1">
+                        <label class="form-label">&nbsp;</label>
+                        <button type="submit" class="btn btn-primary w-100">
+                            <i class="fas fa-search"></i>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    {% if show_report and summary %}
+    <!-- Data Quality Summary -->
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">
+                    <i class="fas fa-tachometer-alt me-2"></i>
+                    Data Quality Summary - {{ summary.schema_name }}.{{ summary.table_name }}
+                </h5>
+                
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <small class="text-muted">Run Date: {{ summary.run_date.strftime('%Y-%m-%d %H:%M:%S') }}</small>
+                    </div>
+                    <div class="col-md-6 text-end">
+                        <small class="text-muted">Total Rows: {{ "{:,}".format(row_count) }}</small>
+                    </div>
+                </div>
+
+                <!-- Overall KPI Cards -->
+                <div class="row mb-4">
+                    {% for dimension, score in summary.overall_scores.items() %}
+                    <div class="col-md-2 mb-3">
+                        <div class="card h-100 {% if score is not none %}{% if score >= 70 %}border-success{% elif score >= 40 %}border-warning{% else %}border-danger{% endif %}{% else %}border-secondary{% endif %}">
+                            <div class="card-body text-center">
+                                <h6 class="card-title text-capitalize">{{ dimension }}</h6>
+                                {% if score is not none %}
+                                    <h4 class="{% if score >= 70 %}text-success{% elif score >= 40 %}text-warning{% else %}text-danger{% endif %}">
+                                        {{ "%.1f"|format(score) }}%
+                                    </h4>
+                                {% else %}
+                                    <h4 class="text-muted">N/A</h4>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <!-- CDE-Specific Scores -->
+                <div class="row mb-4">
+                    <div class="col-12">
+                        <h6>Critical Data Elements (CDE) Scores</h6>
+                        <div class="row">
+                            {% for dimension, score in summary.cde_scores.items() %}
+                            {% if score is not none %}
+                            <div class="col-md-2 mb-2">
+                                <div class="card bg-dark border-primary">
+                                    <div class="card-body text-center py-2">
+                                        <small class="text-capitalize">{{ dimension }}</small>
+                                        <div class="{% if score >= 70 %}text-success{% elif score >= 40 %}text-warning{% else %}text-danger{% endif %}">
+                                            <strong>{{ "%.1f"|format(score) }}%</strong>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chart Visualization -->
+                <div class="row">
+                    <div class="col-md-6">
+                        <canvas id="overallScoresChart" width="400" height="200"></canvas>
+                    </div>
+                    <div class="col-md-6">
+                        <canvas id="cdeScoresChart" width="400" height="200"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detailed Metrics Tables -->
+    {% for dimension, metrics in summary.metrics|groupby('dimension') %}
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-body">
+                <h6 class="card-title text-capitalize">
+                    <i class="fas fa-list me-2"></i>
+                    {{ dimension }} Metrics
+                </h6>
+                
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover">
+                        <thead>
+                            <tr>
+                                <th>Column</th>
+                                <th>Score</th>
+                                <th>CDE</th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for metric in metrics %}
+                            <tr {% if metric.is_cde %}class="table-primary"{% endif %}>
+                                <td>
+                                    {{ metric.column_name }}
+                                    {% if metric.is_cde %}
+                                        <span class="badge bg-primary ms-1">CDE</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="badge {% if metric.score >= 70 %}bg-success{% elif metric.score >= 40 %}bg-warning{% else %}bg-danger{% endif %}">
+                                        {{ "%.1f"|format(metric.score) }}%
+                                    </span>
+                                </td>
+                                <td>
+                                    {% if metric.is_cde %}
+                                        <i class="fas fa-star text-warning"></i>
+                                    {% else %}
+                                        <i class="fas fa-minus text-muted"></i>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <small class="text-muted">
+                                        {% for key, value in metric.details.items() %}
+                                            {{ key }}: {{ value }}{% if not loop.last %}, {% endif %}
+                                        {% endfor %}
+                                    </small>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    <!-- Loading Spinner -->
+    <div id="loadingSpinner" class="col-12 text-center" style="display: none;">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+        <p class="mt-2">Calculating data quality metrics...</p>
+    </div>
+    {% endif %}
+</div>
+
+{% if show_report and summary %}
+<script>
+    // Chart data from server
+    const overallScores = {{ summary.overall_scores|tojson }};
+    const cdeScores = {{ summary.cde_scores|tojson }};
+    
+    // Initialize charts when page loads
+    document.addEventListener('DOMContentLoaded', function() {
+        initializeCharts(overallScores, cdeScores);
+    });
+</script>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Initialize dashboard functionality
+    document.addEventListener('DOMContentLoaded', function() {
+        initializeDashboard();
+    });
+</script>
+{% endblock %}
