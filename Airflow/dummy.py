@@ -1,66 +1,106 @@
-# Load config file
-response = s3.get_object(Bucket=bucket, Key=config_key)
-file_content_lines = response['Body'].read().decode('utf-8').strip().split('\n')
+def s3_copy_and_decrypt(**kwargs):
+    import boto3
+    import os
 
-for line in file_content_lines:
-    if not line.strip() or '|' not in line:
-        continue
+    s3 = boto3.client('s3')
+    lambda_client = boto3.client('lambda')
 
-    src_base, middle_value, dst_base = [x.strip().rstrip('/') for x in line.strip().split('|')]
+    # Airflow-passed folderdate
+    folder_date = kwargs['dag_run'].conf.get('S3-Copy-folderdate')
+    if not folder_date:
+        raise ValueError("Missing S3-Copy-folderdate in DAG config")
 
-    src_full_prefix = src_base.replace('{0}', folder_date).rstrip('/')
-    dst_base = dst_base.rstrip('/')
-    middle_value = middle_value.strip()
+    bucket = "your-bucket-name"
+    s3_config_file_path = "path/to/config.txt"
+    lambda_function_name = "your-lambda-name"
+    errfolderpath = "s3://your-error-folder/"
+    decrypt_secret = "your-secret"
+    assume_role = "your-role"
 
-    # Wildcard: copy everything under folder_date
-    if middle_value == '*':
-        folder_prefix = f"{src_full_prefix}/"
-        dst_folder_prefix = f"{dst_base}/S3-COPY-{folder_date}/"
-        print(f"[Wildcard] Resolved source prefix: {folder_prefix}")
-        print(f"[Wildcard] Destination prefix: {dst_folder_prefix}")
+    # Read config file from S3
+    response = s3.get_object(Bucket=bucket, Key=s3_config_file_path)
+    file_lines = response['Body'].read().decode('utf-8').strip().split('\n')
 
-        result = s3.list_objects_v2(Bucket=bucket, Prefix=folder_prefix, MaxKeys=1)
-        if 'Contents' not in result:
-            print(f"⚠ No contents found at: {folder_prefix}. Skipping...")
+    for line in file_lines:
+        if not line.strip() or '"' not in line:
             continue
 
-        paginator = s3.get_paginator('list_objects_v2')
-        for page in paginator.paginate(Bucket=bucket, Prefix=folder_prefix):
-            for obj in page.get('Contents', []):
-                skey = obj['Key']
-                if skey.endswith('/'):
+        try:
+            src_prefix, file_pattern, dst_prefix = [x.strip() for x in line.strip().split('|')]
+
+            # Inject folder_date into src path
+            src_prefix = src_prefix.replace("{0}", folder_date).strip().lstrip('/')
+            file_pattern = file_pattern.strip()
+
+            # Build final destination: dst_prefix/s3-copy-<folder_date>/
+            dst_prefix = dst_prefix.rstrip('/') + f"/s3-copy-{folder_date}"
+
+            if file_pattern == '*':
+                # Copy all under src_prefix/
+                folder_prefix = src_prefix if src_prefix.endswith('/') else src_prefix + '/'
+                paginator = s3.get_paginator('list_objects_v2')
+
+                result = s3.list_objects_v2(Bucket=bucket, Prefix=folder_prefix, MaxKeys=1)
+                if 'Contents' not in result:
+                    print(f"No contents in folder: {folder_prefix}")
                     continue
-                relative_path = skey[len(folder_prefix):]
-                dkey = f"{dst_folder_prefix}{relative_path}"
-                print(f"Copying {skey} → {dkey}")
-                s3.copy_object(Bucket=bucket, CopySource={'Bucket': bucket, 'Key': skey}, Key=dkey)
 
-    else:
-        src_key = f"{src_full_prefix}/{middle_value}".rstrip('/')
-        folder_prefix = f"{src_key}/"
-        result = s3.list_objects_v2(Bucket=bucket, Prefix=folder_prefix, MaxKeys=1)
-        is_folder = 'Contents' in result
+                for page in paginator.paginate(Bucket=bucket, Prefix=folder_prefix):
+                    for obj in page.get('Contents', []):
+                        skey = obj['Key']
+                        if skey.endswith('/'):
+                            continue
 
-        if is_folder:
-            dst_folder_prefix = f"{dst_base}/S3-COPY-{folder_date}/{middle_value.strip('/')}/"
-            print(f"Copying folder: {folder_prefix} → {dst_folder_prefix}")
-            paginator = s3.get_paginator('list_objects_v2')
-            for page in paginator.paginate(Bucket=bucket, Prefix=folder_prefix):
-                for obj in page.get('Contents', []):
-                    skey = obj['Key']
-                    if skey.endswith('/'):
-                        continue
-                    relative_path = skey[len(folder_prefix):]
-                    dkey = f"{dst_folder_prefix}{relative_path}"
-                    print(f"Copying {skey} → {dkey}")
-                    s3.copy_object(Bucket=bucket, CopySource={'Bucket': bucket, 'Key': skey}, Key=dkey)
+                        dkey = skey.replace(folder_prefix, dst_prefix + '/', 1)
 
-        else:
-            dst_key = f"{dst_base}/S3-COPY-{folder_date}/{middle_value}"
-            print(f"Copying file: {src_key} → {dst_key}")
-            try:
-                s3.head_object(Bucket=bucket, Key=src_key)
-            except s3.exceptions.ClientError as e:
-                print(f"⚠ File not found: {src_key}. Skipping.")
-                continue
-            s3.copy_object(Bucket=bucket, CopySource={'Bucket': bucket, 'Key': src_key}, Key=dst_key)
+                        if dkey.endswith('.pgp'):
+                            dest_folder = os.path.dirname(dkey.rstrip('/')) + '/'
+                            trigger_lambda(lambda_client, lambda_function_name, skey, bucket, dest_folder, errfolderpath, decrypt_secret, assume_role)
+                            print(f"[Decrypt] {skey} → {dest_folder}")
+                        else:
+                            s3.copy_object(Bucket=bucket, CopySource={'Bucket': bucket, 'Key': skey}, Key=dkey)
+                            print(f"[Folder Copy] {skey} → {dkey}")
+
+            elif '/' not in file_pattern and '.' not in file_pattern:
+                # This is a subfolder copy like "subfolder"
+                subfolder_prefix = f"{src_prefix}/{file_pattern}/"
+                paginator = s3.get_paginator('list_objects_v2')
+
+                result = s3.list_objects_v2(Bucket=bucket, Prefix=subfolder_prefix, MaxKeys=1)
+                if 'Contents' not in result:
+                    print(f"No contents in subfolder: {subfolder_prefix}")
+                    continue
+
+                for page in paginator.paginate(Bucket=bucket, Prefix=subfolder_prefix):
+                    for obj in page.get('Contents', []):
+                        skey = obj['Key']
+                        if skey.endswith('/'):
+                            continue
+
+                        dkey = skey.replace(src_prefix, dst_prefix, 1)
+
+                        if dkey.endswith('.pgp'):
+                            dest_folder = os.path.dirname(dkey.rstrip('/')) + '/'
+                            trigger_lambda(lambda_client, lambda_function_name, skey, bucket, dest_folder, errfolderpath, decrypt_secret, assume_role)
+                            print(f"[Decrypt] {skey} → {dest_folder}")
+                        else:
+                            s3.copy_object(Bucket=bucket, CopySource={'Bucket': bucket, 'Key': skey}, Key=dkey)
+                            print(f"[Subfolder Copy] {skey} → {dkey}")
+
+            else:
+                # Single file copy
+                src = f"{src_prefix}/{file_pattern}"
+                dst = f"{dst_prefix}/"
+                file_name = file_pattern.split('/')[-1]
+                dest_key = f"{dst}{file_name}"
+
+                if dest_key.endswith('.pgp'):
+                    dest_folder = os.path.dirname(dest_key.rstrip('/')) + '/'
+                    trigger_lambda(lambda_client, lambda_function_name, src, bucket, dest_folder, errfolderpath, decrypt_secret, assume_role)
+                    print(f"[Decrypt] {src} → {dest_folder}")
+                else:
+                    s3.copy_object(Bucket=bucket, CopySource={'Bucket': bucket, 'Key': src}, Key=dest_key)
+                    print(f"[File Copy] {src} → {dest_key}")
+
+        except Exception as e:
+            print(f"Error processing config line: {line} → {e}")
