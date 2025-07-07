@@ -5,6 +5,7 @@ from airflow.exceptions import AirflowException
 
 import boto3
 import subprocess
+import re
 from botocore.exceptions import ClientError
 
 # CONFIG
@@ -29,12 +30,17 @@ def s3_copy_files(**kwargs):
 
             try:
                 src_prefix, file_pattern, dst_prefix = [x.strip() for x in line.strip().split('|')]
-                src_prefix = src_prefix.replace("{0}", folder_date)
-                S3_Copy_Folder_name = folder_date.strip("/").split("/")[0]
 
-                if "REP" in dst_prefix:
-                    subfolder_name = src_prefix.rstrip('/').split('/')[-1]
-                    dst_prefix = dst_prefix.rstrip("/") + f"/S3-COPY-{S3_Copy_Folder_name}/{subfolder_name}"
+                # Extract subfolder before {0}
+                match = re.search(r'([^/]+)/\{0\}', src_prefix)
+                subfolder_name = match.group(1) if match else "UNKNOWN"
+
+                # Apply folder_date
+                src_prefix = src_prefix.replace("{0}", folder_date)
+
+                # Append S3-COPY-folder_date/subfolder if REP in dst
+                if "REP" in dst_prefix or "S3-COPY" in dst_prefix:
+                    dst_prefix = dst_prefix.rstrip("/") + f"/S3-COPY-{folder_date}/{subfolder_name}"
 
                 src_prefix = src_prefix.lstrip('/')
                 dst_prefix = dst_prefix.lstrip('/')
@@ -60,7 +66,7 @@ def s3_copy_files(**kwargs):
                             print("Source not found, skipping.")
                             continue
                 else:
-                    is_folder = True  # "*" implies folder copy
+                    is_folder = True  # wildcard = folder copy
 
                 if is_folder:
                     src_uri = f"s3://{bucket}/{src_prefix.rstrip('/')}/"
