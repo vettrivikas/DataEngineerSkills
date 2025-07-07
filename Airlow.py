@@ -1,61 +1,82 @@
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.utils.dates import days_ago
-import boto3
-#="{""sourcekey"": [" & TEXTJOIN(", ", TRUE, """" & A2:A11 & """") & "]}"
+import subprocess
+import os
+from botocore.exceptions import ClientError
+from airflow.exceptions import AirflowException
 
-def generic_s3_copy(**kwargs):
-    s3 = boto3.client('s3')
+def s3_copy_and_decrypt(**kwargs):
+    folder_date = kwargs['dag_run'].conf.get('folderdate')
 
-    bucket = kwargs['dag_run'].conf.get('bucket_name')
-    src_raw = kwargs['dag_run'].conf.get('source_keys')
-    dst_raw = kwargs['dag_run'].conf.get('dest_keys')
+    response = s3.get_object(Bucket=bucket, Key=S3ConfigFilePath)
+    file_content_lines = response['Body'].read().decode('utf-8').strip().split('\n')
 
-    # Normalize to lists
-    source_keys = [src_raw] if isinstance(src_raw, str) else src_raw
-    dest_keys = [dst_raw] if isinstance(dst_raw, str) else dst_raw
+    for line in file_content_lines:
+        if not line.strip() or '|' not in line:
+            continue
 
-    if not (source_keys and dest_keys) or len(source_keys) != len(dest_keys):
-        raise ValueError("source_keys and dest_keys must be non-empty and of equal length")
+        src_prefix, file_pattern, dst_prefix = [x.strip() for x in line.strip().split('|')]
 
-    for src, dst in zip(source_keys, dest_keys):
-        if not src.endswith('/'):
-            # Single file
-            file_name = src.split('/')[-1]
-            dest_key = f"{dst.rstrip('/')}/{file_name}"
-            s3.copy_object(
-                Bucket=bucket,
-                CopySource={'Bucket': bucket, 'Key': src},
-                Key=dest_key
-            )
-            print(f"[file] Copied {src} → {dest_key}")
-        else:
-            # Folder copy
+        src_prefix = src_prefix.replace('{0}', folder_date)
+        S3_Copy_Folder_name = folder_date.strip("/").split("/")[0]
+
+        # If REP is in destination path, append /S3-COPY-{folderdate}/<subfolder>
+        if "REP" in dst_prefix:
+            subfolder_name = src_prefix.rstrip('/').split('/')[-1]
+            dst_prefix = dst_prefix.rstrip("/") + f"/S3-COPY-{S3_Copy_Folder_name}/{subfolder_name}"
+
+        src_prefix = src_prefix.lstrip('/')
+        dst_prefix = dst_prefix.lstrip('/')
+
+        print(f"SRC: {src_prefix}")
+        print(f"DST: {dst_prefix}")
+
+        file_pattern_check = src_prefix.rstrip('/') + "/" + file_pattern.lstrip('/')
+
+        try:
+            s3.head_object(Bucket=bucket, Key=file_pattern_check)
+            is_folder = False
+            print("It's a file")
+        except ClientError:
+            file_pattern_check_response = s3.list_objects_v2(Bucket=bucket, Prefix=file_pattern_check)
+            if "Contents" in file_pattern_check_response:
+                print("It's a folder")
+                file_pattern = "SubFolder"
+                is_folder = True
+                src_prefix = file_pattern_check
+                dst_prefix = dst_prefix.rstrip("/") + "/" + folder_date.lstrip('/')
+            else:
+                continue
+
+        if file_pattern in ("*", "SubFolder"):
+            # Folder case
+            folder_prefix = src_prefix if src_prefix.endswith('/') else src_prefix + '/'
+            result = s3.list_objects_v2(Bucket=bucket, Prefix=folder_prefix, MaxKeys=1)
+
+            if 'Contents' not in result:
+                print(f"No contents in: {folder_prefix}")
+                continue
+
             paginator = s3.get_paginator('list_objects_v2')
-            for page in paginator.paginate(Bucket=bucket, Prefix=src):
+            for page in paginator.paginate(Bucket=bucket, Prefix=folder_prefix):
                 for obj in page.get('Contents', []):
                     skey = obj['Key']
                     if skey.endswith('/'):
                         continue
-                    dkey = skey.replace(src, dst, 1)
-                    s3.copy_object(
-                        Bucket=bucket,
-                        CopySource={'Bucket': bucket, 'Key': skey},
-                        Key=dkey
-                    )
-                    print(f"[folder] Copied {skey} → {dkey}")
-
-# Define DAG
-with DAG(
-    dag_id='s3_generic_copy_dag',
-    start_date=days_ago(1),
-    schedule_interval=None,
-    catchup=False,
-    tags=['s3', 'copy']
-) as dag:
-
-    copy_task = PythonOperator(
-        task_id='copy_files_or_folders',
-        python_callable=generic_s3_copy,
-        provide_context=True
-    )
+                    dkey = skey.replace(folder_prefix, dst_prefix.rstrip('/') + '/', 1)
+                    src_uri = f"s3://{bucket}/{skey}"
+                    dst_uri = f"s3://{bucket}/{dkey}"
+                    print(f"[Folder] Moving {src_uri} → {dst_uri}")
+                    result = subprocess.call(["aws", "s3", "mv", src_uri, dst_uri])
+                    if result != 0:
+                        raise AirflowException(f"Move failed: {src_uri} → {dst_uri}")
+        else:
+            # Single file case
+            src = f"{src_prefix.rstrip('/')}/{file_pattern}"
+            dst = f"{dst_prefix.rstrip('/')}/"
+            file_name = src.split('/')[-1]
+            dest_key = f"{dst}{file_name}"
+            src_uri = f"s3://{bucket}/{src}"
+            dst_uri = f"s3://{bucket}/{dest_key}"
+            print(f"[File] Moving {src_uri} → {dst_uri}")
+            result = subprocess.call(["aws", "s3", "mv", src_uri, dst_uri])
+            if result != 0:
+                raise AirflowException(f"Move failed: {src_uri} → {dst_uri}")
