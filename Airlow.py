@@ -32,7 +32,6 @@ def s3_copy_files(**kwargs):
                 src_prefix = src_prefix.replace("{0}", folder_date)
                 S3_Copy_Folder_name = folder_date.strip("/").split("/")[0]
 
-                # Handle destination structure
                 if "REP" in dst_prefix:
                     subfolder_name = src_prefix.rstrip('/').split('/')[-1]
                     dst_prefix = dst_prefix.rstrip("/") + f"/S3-COPY-{S3_Copy_Folder_name}/{subfolder_name}"
@@ -42,34 +41,35 @@ def s3_copy_files(**kwargs):
 
                 print(f"\nProcessing:\nSRC: {src_prefix}\nDST: {dst_prefix}\nPATTERN: {file_pattern}")
 
-                full_key = f"{src_prefix.rstrip('/')}/{file_pattern.lstrip('/')}"
                 is_folder = False
+                full_key = f"{src_prefix.rstrip('/')}/{file_pattern.lstrip('/')}"
 
-                try:
-                    s3.head_object(Bucket=bucket, Key=full_key)
-                    print("Identified as a file")
-                except ClientError:
-                    print("Not a file, checking if folder...")
-                    result = s3.list_objects_v2(Bucket=bucket, Prefix=full_key, MaxKeys=1)
-                    if "Contents" in result:
-                        is_folder = True
-                        print("Identified as a folder")
-                        src_prefix = full_key
-                        dst_prefix = dst_prefix.rstrip("/") + "/" + folder_date.lstrip('/')
-                    else:
-                        print("Source not found, skipping.")
-                        continue
+                if file_pattern != "*":
+                    try:
+                        s3.head_object(Bucket=bucket, Key=full_key)
+                        print("Identified as a file")
+                    except ClientError:
+                        print("Not a file, checking if folder...")
+                        result = s3.list_objects_v2(Bucket=bucket, Prefix=full_key, MaxKeys=1)
+                        if "Contents" in result:
+                            is_folder = True
+                            print("Identified as a folder")
+                            src_prefix = full_key
+                            dst_prefix = dst_prefix.rstrip("/") + "/" + folder_date.lstrip('/')
+                        else:
+                            print("Source not found, skipping.")
+                            continue
+                else:
+                    is_folder = True  # "*" implies folder copy
 
-                if is_folder or file_pattern in ("*", "SubFolder"):
-                    # Folder copy
+                if is_folder:
                     src_uri = f"s3://{bucket}/{src_prefix.rstrip('/')}/"
                     dst_uri = f"s3://{bucket}/{dst_prefix.rstrip('/')}/"
-                    print(f"[Recursive Copy] {src_uri} → {dst_uri}")
+                    print(f"[Folder Copy] {src_uri} → {dst_uri}")
                     result = subprocess.call(["aws", "s3", "cp", src_uri, dst_uri, "--recursive"])
                     if result != 0:
-                        raise AirflowException(f"Recursive copy failed: {src_uri} → {dst_uri}")
+                        raise AirflowException(f"Folder copy failed: {src_uri} → {dst_uri}")
                 else:
-                    # Single file copy
                     file_name = full_key.split('/')[-1]
                     dst_key = f"{dst_prefix.rstrip('/')}/{file_name}"
                     src_uri = f"s3://{bucket}/{full_key}"
@@ -77,7 +77,7 @@ def s3_copy_files(**kwargs):
                     print(f"[File Copy] {src_uri} → {dst_uri}")
                     result = subprocess.call(["aws", "s3", "cp", src_uri, dst_uri])
                     if result != 0:
-                        raise AirflowException(f"Copy failed: {src_uri} → {dst_uri}")
+                        raise AirflowException(f"File copy failed: {src_uri} → {dst_uri}")
 
             except Exception as file_error:
                 print(f"Error processing line: {line}\n{str(file_error)}")
