@@ -21,6 +21,14 @@ def s3_copy_files(**kwargs):
         if not folder_date:
             raise ValueError("Missing 'folderdate' in dag_run.conf")
 
+        # Parse folder_date → base_id + suffix_folder
+        if '/' in folder_date:
+            base_id, suffix_folder = folder_date.split('/', 1)
+        else:
+            base_id = folder_date
+            suffix_folder = ''
+
+        # Read config file
         response = s3.get_object(Bucket=bucket, Key=S3ConfigFilePath)
         file_content_lines = response['Body'].read().decode('utf-8').strip().split('\n')
 
@@ -35,13 +43,21 @@ def s3_copy_files(**kwargs):
                 match = re.search(r'([^/]+)/\{0\}', src_prefix)
                 subfolder_name = match.group(1) if match else "UNKNOWN"
 
-                # Apply folder_date
+                # Replace {0} in source
                 src_prefix = src_prefix.replace("{0}", folder_date)
 
-                # Append S3-COPY-folder_date/subfolder if REP in dst
-                if "REP" in dst_prefix or "S3-COPY" in dst_prefix:
-                    dst_prefix = dst_prefix.rstrip("/") + f"/S3-COPY-{folder_date}/{subfolder_name}"
+                original_dst_prefix = dst_prefix
 
+                # Build destination path conditionally based on REP_
+                if "REP_" in original_dst_prefix.upper():
+                    dst_prefix = dst_prefix.rstrip("/") + f"/S3-COPY-{base_id}/{subfolder_name}"
+                else:
+                    dst_prefix = dst_prefix.rstrip("/") + f"/{subfolder_name}"
+
+                if suffix_folder:
+                    dst_prefix += f"/{suffix_folder}"
+
+                # Normalize
                 src_prefix = src_prefix.lstrip('/')
                 dst_prefix = dst_prefix.lstrip('/')
 
@@ -61,12 +77,11 @@ def s3_copy_files(**kwargs):
                             is_folder = True
                             print("Identified as a folder")
                             src_prefix = full_key
-                            dst_prefix = dst_prefix.rstrip("/") + "/" + folder_date.lstrip('/')
                         else:
                             print("Source not found, skipping.")
                             continue
                 else:
-                    is_folder = True  # wildcard = folder copy
+                    is_folder = True
 
                 if is_folder:
                     src_uri = f"s3://{bucket}/{src_prefix.rstrip('/')}/"
@@ -93,11 +108,11 @@ def s3_copy_files(**kwargs):
 
 # DAG Definition
 with DAG(
-    dag_id="s3_copy_from_config_with_folderdate",
+    dag_id="s3_copy_config_with_folderdate_structured",
     start_date=days_ago(1),
     schedule_interval=None,
     catchup=False,
-    params={"folderdate": "20250701"},
+    params={"folderdate": "2030934/bank_details"},
     tags=["s3", "copy", "config"],
 ) as dag:
 
