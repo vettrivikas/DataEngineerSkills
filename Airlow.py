@@ -28,7 +28,6 @@ def s3_copy_files(**kwargs):
             base_id = folder_date
             suffix_folder = ''
 
-        # Read config file
         response = s3.get_object(Bucket=bucket, Key=S3ConfigFilePath)
         file_content_lines = response['Body'].read().decode('utf-8').strip().split('\n')
 
@@ -39,25 +38,19 @@ def s3_copy_files(**kwargs):
             try:
                 src_prefix, file_pattern, dst_prefix = [x.strip() for x in line.strip().split('|')]
 
-                # Extract subfolder before {0}
                 match = re.search(r'([^/]+)/\{0\}', src_prefix)
                 subfolder_name = match.group(1) if match else "UNKNOWN"
 
-                # Replace {0} in source
                 src_prefix = src_prefix.replace("{0}", folder_date)
-
                 original_dst_prefix = dst_prefix
 
-                # Build destination path conditionally based on REP_
                 if "REP_" in original_dst_prefix.upper():
                     dst_prefix = dst_prefix.rstrip("/") + f"/S3-COPY-{base_id}/{subfolder_name}"
+                    if suffix_folder:
+                        dst_prefix += f"/{suffix_folder}"
                 else:
-                    dst_prefix = dst_prefix.rstrip("/") + f"/{subfolder_name}"
+                    dst_prefix = dst_prefix.rstrip("/")  # use directly without extra folders
 
-                if suffix_folder:
-                    dst_prefix += f"/{suffix_folder}"
-
-                # Normalize
                 src_prefix = src_prefix.lstrip('/')
                 dst_prefix = dst_prefix.lstrip('/')
 
@@ -106,7 +99,8 @@ def s3_copy_files(**kwargs):
     except Exception as dag_error:
         raise AirflowException(f"DAG failed due to error: {str(dag_error)}")
 
-# DAG Definition
+
+    # DAG Definition
 with DAG(
     dag_id="s3_copy_config_with_folderdate_structured",
     start_date=days_ago(1),
