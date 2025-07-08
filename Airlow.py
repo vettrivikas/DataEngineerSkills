@@ -1,119 +1,39 @@
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.utils.dates import days_ago
-from airflow.exceptions import AirflowException
-
 import boto3
-import subprocess
-import re
-from botocore.exceptions import ClientError
 
-# CONFIG
-bucket = "your-bucket-name"
-S3ConfigFilePath = "your/config/path/config.txt"
-aws_region = "ap-south-1"
+s3 = boto3.client('s3')
 
-s3 = boto3.client("s3", region_name=aws_region)
-
-def s3_copy_files(**kwargs):
+def archivefile():
     try:
-        folder_date = kwargs['dag_run'].conf.get('folderdate')
-        if not folder_date:
-            raise ValueError("Missing 'folderdate' in dag_run.conf")
+        # Step 1: Read the config file from S3
+        config_obj = s3.get_object(Bucket=bucket_name, Key=S3ConfigFilePath)
+        config_data = config_obj['Body'].read().decode('utf-8')
 
-        # Parse folder_date → base_id + suffix_folder
-        if '/' in folder_date:
-            base_id, suffix_folder = folder_date.split('/', 1)
-        else:
-            base_id = folder_date
-            suffix_folder = ''
+        # Step 2: Add new line (example: hardcoded key-value pair)
+        new_line = "NEW_PARAM=enabled"
+        if not config_data.endswith('\n'):
+            config_data += '\n'
+        config_data += new_line + '\n'
 
-        response = s3.get_object(Bucket=bucket, Key=S3ConfigFilePath)
-        file_content_lines = response['Body'].read().decode('utf-8').strip().split('\n')
+        # Step 3: Upload updated config to archive path
+        s3.put_object(
+            Bucket=bucket_name,
+            Key=ArchiveFilePath,
+            Body=config_data,
+            ContentType='text/plain'
+        )
 
-        for line in file_content_lines:
-            if not line.strip() or '|' not in line:
-                continue
+        print(f"File successfully updated and archived at: {ArchiveFilePath}")
+        # send_sns_notification(f"File archived to: {ArchiveFilePath}", status="[Success]", jobName='Adhoc_RedshiftQueryExecution')
 
-            try:
-                src_prefix, file_pattern, dst_prefix = [x.strip() for x in line.strip().split('|')]
+        return True
 
-                match = re.search(r'([^/]+)/\{0\}', src_prefix)
-                subfolder_name = match.group(1) if match else "UNKNOWN"
+    except Exception as Archive_Exception:
+        error_msg = Archive_Exception.get('M') if isinstance(Archive_Exception, dict) else str(Archive_Exception)
 
-                src_prefix = src_prefix.replace("{0}", folder_date)
-                original_dst_prefix = dst_prefix
+        message = (
+            f"There was a problem archiving the file: {error_msg}. "
+            f"Check archive path: {ArchiveFilePath} and source: {S3ConfigFilePath}"
+        )
 
-                if "REP_" in original_dst_prefix.upper():
-                    dst_prefix = dst_prefix.rstrip("/") + f"/S3-COPY-{base_id}/{subfolder_name}"
-                    if suffix_folder:
-                        dst_prefix += f"/{suffix_folder}"
-                else:
-                    dst_prefix = dst_prefix.rstrip("/")  # use directly without extra folders
-
-                src_prefix = src_prefix.lstrip('/')
-                dst_prefix = dst_prefix.lstrip('/')
-
-                print(f"\nProcessing:\nSRC: {src_prefix}\nDST: {dst_prefix}\nPATTERN: {file_pattern}")
-
-                is_folder = False
-                full_key = f"{src_prefix.rstrip('/')}/{file_pattern.lstrip('/')}"
-
-                if file_pattern != "*":
-                    try:
-                        s3.head_object(Bucket=bucket, Key=full_key)
-                        print("Identified as a file")
-                    except ClientError:
-                        print("Not a file, checking if folder...")
-                        result = s3.list_objects_v2(Bucket=bucket, Prefix=full_key, MaxKeys=1)
-                        if "Contents" in result:
-                            is_folder = True
-                            print("Identified as a folder")
-                            src_prefix = full_key
-                        else:
-                            print("Source not found, skipping.")
-                            continue
-                else:
-                    is_folder = True
-
-                if is_folder:
-                    src_uri = f"s3://{bucket}/{src_prefix.rstrip('/')}/"
-                    dst_uri = f"s3://{bucket}/{dst_prefix.rstrip('/')}/"
-                    print(f"[Folder Copy] {src_uri} → {dst_uri}")
-                    result = subprocess.call(["aws", "s3", "cp", src_uri, dst_uri, "--recursive"])
-                    if result != 0:
-                        raise AirflowException(f"Folder copy failed: {src_uri} → {dst_uri}")
-                else:
-                    file_name = full_key.split('/')[-1]
-                    dst_key = f"{dst_prefix.rstrip('/')}/{file_name}"
-                    src_uri = f"s3://{bucket}/{full_key}"
-                    dst_uri = f"s3://{bucket}/{dst_key}"
-                    print(f"[File Copy] {src_uri} → {dst_uri}")
-                    result = subprocess.call(["aws", "s3", "cp", src_uri, dst_uri])
-                    if result != 0:
-                        raise AirflowException(f"File copy failed: {src_uri} → {dst_uri}")
-
-            except Exception as file_error:
-                print(f"Error processing line: {line}\n{str(file_error)}")
-
-    except Exception as dag_error:
-        raise AirflowException(f"DAG failed due to error: {str(dag_error)}")
-
-
-    # DAG Definition
-with DAG(
-    dag_id="s3_copy_config_with_folderdate_structured",
-    start_date=days_ago(1),
-    schedule_interval=None,
-    catchup=False,
-    params={"folderdate": "2030934/bank_details"},
-    tags=["s3", "copy", "config"],
-) as dag:
-
-    run_copy = PythonOperator(
-        task_id="copy_files_from_s3_config",
-        python_callable=s3_copy_files,
-        provide_context=True
-    )
-
-    run_copy
+        send_sns_notification(message, status="[Failure]", jobName='Adhoc_RedshiftQueryExecution')
+        raise Exception(f"{error_msg}")
