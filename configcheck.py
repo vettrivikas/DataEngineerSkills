@@ -10,6 +10,7 @@ Default connection: redshift-connection-dev2 (JDBC type)
 
 Job Parameters:
 - JOB_NAME (required): Name of the Glue job
+- TempDir (required): S3 temporary directory for Redshift operations (e.g., s3://your-bucket/temp/)
 - process_id (optional): Process ID for data quality checks (default: 11)
 - connection_name (optional): Glue connection name (default: redshift-connection-dev2)
 """
@@ -119,7 +120,8 @@ class PureSparkDataQuality:
                     "query": query,
                     "fetchsize": CONNECTION_CONFIG['fetchsize'],
                     "batchsize": CONNECTION_CONFIG['batchsize']
-                }
+                },
+                transformation_ctx="read_from_redshift"
             )
             
             # Convert to DataFrame
@@ -697,8 +699,8 @@ class PureSparkDataQuality:
 def main():
     """Main function for AWS Glue job"""
     
-    # Get job arguments - only JOB_NAME is required
-    args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+    # Get job arguments - JOB_NAME and TempDir are required for Redshift operations
+    args = getResolvedOptions(sys.argv, ['JOB_NAME', 'TempDir'])
     
     # Get optional parameters with defaults
     try:
@@ -722,6 +724,7 @@ def main():
     logger.info(f"Starting Glue Data Quality Job: {args['JOB_NAME']}")
     logger.info(f"Process ID: {process_id}")
     logger.info(f"Redshift Connection: {connection_name}")
+    logger.info(f"Temp Directory: {args['TempDir']}")
     
     # Apply Spark configurations
     for key, value in SPARK_CONFIG.items():
