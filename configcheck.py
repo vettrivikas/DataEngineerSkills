@@ -9,9 +9,12 @@ UPDATED: Modified to use AWS Glue connections instead of hardcoded JDBC paramete
 Default connection: redshift-connection-dev2 (JDBC type)
 
 RECENT FIXES:
-- Fixed SQL GROUP BY error: Removed invalid string literals from GROUP BY clauses
-- Fixed DynamicFrame method calls: Updated to use correct underscore syntax
-- Integrated redshift_query function with direct JDBC connection validation
+- Fixed SQL GROUP BY error: Removed invalid string literals from GROUP BY clauses in OOTB_NOTNULL check
+- Fixed DynamicFrame method calls: Updated to use correct underscore syntax (create_dynamic_frame_from_options, write_dynamic_frame_from_options)
+- Fixed DynamicFrame creation: Changed from glue_context.create_dynamic_frame_from_dataframe to DynamicFrame.fromDF
+- Added DynamicFrame import from awsglue.dynamicframe
+- Integrated redshift_query function with direct JDBC connection validation using py4j
+- Added comprehensive DataFrame debugging: All DataFrames are now printed with schema and data for troubleshooting
 
 Job Parameters:
 - JOB_NAME (required): Name of the Glue job
@@ -29,6 +32,7 @@ from awsglue.transforms import *
 from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
 from awsglue.job import Job
+from awsglue.dynamicframe import DynamicFrame
 
 from pyspark.context import SparkContext
 from pyspark.sql import SparkSession, DataFrame, Row
@@ -174,6 +178,17 @@ class PureSparkDataQuality:
             
             # Cache the DataFrame if it's going to be used multiple times
             df.cache()
+            
+            # Print DataFrame for debugging
+            print(f"=== DataFrame from query (first 20 rows) ===")
+            print(f"Query: {query[:100]}...")
+            print(f"Row count: {df.count()}")
+            print("Schema:")
+            df.printSchema()
+            print("Data:")
+            df.show(20, truncate=False)
+            print("=" * 50)
+            
             return df
             
         except Exception as e:
@@ -206,12 +221,20 @@ class PureSparkDataQuality:
         """Write DataFrame to Redshift using Glue connection with optimized batch processing"""
         try:
             full_table_name = f"{self.target_schema}.{table_name}"
-            self.logger.info(f"Writing {df.count()} records to {full_table_name}")
+            record_count = df.count()
+            self.logger.info(f"Writing {record_count} records to {full_table_name}")
+            
+            # Print DataFrame for debugging before writing
+            print(f"=== DataFrame to write to {full_table_name} ===")
+            print(f"Row count: {record_count}")
+            print("Schema:")
+            df.printSchema()
+            print("Data:")
+            df.show(20, truncate=False)
+            print("=" * 50)
             
             # Convert DataFrame to DynamicFrame
-            dynamic_frame = self.glue_context.create_dynamic_frame_from_dataframe(
-                df, self.glue_context, "dynamic_frame"
-            )
+            dynamic_frame = DynamicFrame.fromDF(df, self.glue_context, "dynamic_frame")
             
             # Get connection options using the extract_jdbc_conf pattern
             connection_options = self.get_redshift_write_options(table_name)
@@ -251,6 +274,12 @@ class PureSparkDataQuality:
         """
         
         config_df = self.read_from_redshift(query)
+        
+        # Print configuration DataFrame for debugging
+        print(f"=== Check Configurations for Process ID {process_id} ===")
+        print("Configuration DataFrame:")
+        config_df.show(20, truncate=False)
+        print("=" * 50)
         
         # Convert to list of dictionaries using pure PySpark
         configs = []
@@ -407,25 +436,35 @@ class PureSparkDataQuality:
                 count_query, detail_query = self.build_ootb_queries(check_type, key_cols, tgt_qry)
                 
                 # Get count of issues
+                print(f"=== Executing count query for Check ID {check_id} ===")
+                print(f"Count Query: {count_query}")
                 count_df = self.read_from_redshift(count_query)
                 issue_count = count_df.select("issue_count").collect()[0]["issue_count"]
+                print(f"Issue count found: {issue_count}")
                 
                 # Get detailed results if there are issues
                 detail_results = []
                 if issue_count > 0:
+                    print(f"=== Executing detail query for Check ID {check_id} ===")
+                    print(f"Detail Query: {detail_query}")
                     detail_df = self.read_from_redshift(detail_query)
                     detail_results = detail_df.collect()
+                    print(f"Detail results count: {len(detail_results)}")
                 
             elif check_type == 'COMPARE':
                 # Handle comparison checks between source and target
                 if src_qry and tgt_qry:
+                    print(f"=== Executing COMPARE check for Check ID {check_id} ===")
+                    print(f"Source Query: {src_qry}")
                     src_df = self.read_from_redshift(src_qry)
+                    print(f"Target Query: {tgt_qry}")
                     tgt_df = self.read_from_redshift(tgt_qry)
                     
                     # Perform comparison logic
                     src_count = src_df.count()
                     tgt_count = tgt_df.count()
                     issue_count = abs(src_count - tgt_count)
+                    print(f"Source count: {src_count}, Target count: {tgt_count}, Issue count: {issue_count}")
                     
                     if issue_count > 0:
                         # Create detail result using pure PySpark
@@ -480,7 +519,18 @@ class PureSparkDataQuality:
         # Convert tuples to Rows
         log_rows = [Row(*record) for record in log_records]
         
-        return self.spark.createDataFrame(log_rows, log_schema)
+        log_df = self.spark.createDataFrame(log_rows, log_schema)
+        
+        # Print log DataFrame for debugging
+        print(f"=== Log DataFrame created ===")
+        print(f"Log records count: {len(log_records)}")
+        print("Log DataFrame Schema:")
+        log_df.printSchema()
+        print("Log DataFrame Data:")
+        log_df.show(20, truncate=False)
+        print("=" * 50)
+        
+        return log_df
     
     def create_diff_dataframe(self, diff_records: List[Tuple]) -> DataFrame:
         """Create diff DataFrame using pure PySpark"""
@@ -498,7 +548,18 @@ class PureSparkDataQuality:
         # Convert tuples to Rows
         diff_rows = [Row(*record) for record in diff_records]
         
-        return self.spark.createDataFrame(diff_rows, diff_schema)
+        diff_df = self.spark.createDataFrame(diff_rows, diff_schema)
+        
+        # Print diff DataFrame for debugging
+        print(f"=== Diff DataFrame created ===")
+        print(f"Diff records count: {len(diff_records)}")
+        print("Diff DataFrame Schema:")
+        diff_df.printSchema()
+        print("Diff DataFrame Data:")
+        diff_df.show(20, truncate=False)
+        print("=" * 50)
+        
+        return diff_df
     
     def store_log_results(self, log_records: List[Tuple]):
         """Store check results in log table using pure PySpark"""
