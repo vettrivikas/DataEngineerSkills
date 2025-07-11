@@ -71,18 +71,19 @@ SPARK_CONFIG = {
     'spark.sql.execution.arrow.pyspark.fallback.enabled': 'false'
 }
 
-# Connection Performance Configuration
-CONNECTION_CONFIG = {
-    'fetchsize': '10000',
-    'batchsize': '1000',
-    'queryTimeout': '300'
-}
+# Connection Performance Configuration (optional - can be added to connection options if needed)
+# These can be added to the connection options in get_redshift_connection_options if required
+# CONNECTION_PERFORMANCE = {
+#     'fetchsize': '10000',
+#     'batchsize': '1000',
+#     'queryTimeout': '300'
+# }
 
 
 class PureSparkDataQuality:
     """Pure PySpark Data Quality Check Engine for AWS Glue"""
     
-    def __init__(self, glue_context: GlueContext, job_name: str, connection_name: str = None):
+    def __init__(self, glue_context: GlueContext, job_name: str, connection_name: str = None, temp_dir: str = None):
         self.glue_context = glue_context
         self.spark = glue_context.spark_session
         self.job_name = job_name
@@ -96,31 +97,42 @@ class PureSparkDataQuality:
         
         # Get connection details from parameter or default configuration
         self.connection_name = connection_name or self.redshift_config['connection_name']
-        
-        # Initialize Redshift connection options using Glue connection
-        self.redshift_options = {
-            "connectionName": self.connection_name,
-            "fetchsize": CONNECTION_CONFIG['fetchsize'],
-            "batchsize": CONNECTION_CONFIG['batchsize']
-        }
+        self.temp_dir = temp_dir
         
         self.logger.info(f"Initialized PureSparkDataQuality for job: {job_name}")
         self.logger.info(f"Using Glue connection: {self.connection_name}")
+        self.logger.info(f"Using temp directory: {self.temp_dir}")
+    
+    def get_redshift_connection_options(self, query: str) -> dict:
+        """Get Redshift connection options using Glue connection"""
+        self.logger.info(f'Getting details for connection: {self.connection_name}')
+        
+        # Extract JDBC configuration from Glue connection
+        source_jdbc_conf = self.glue_context.extract_jdbc_conf(self.connection_name)
+        
+        # Create connection options
+        connection_options = {
+            "url": source_jdbc_conf.get('url'),
+            "query": query,
+            "user": source_jdbc_conf.get('user'),
+            "password": source_jdbc_conf.get('password'),
+            "redshiftTmpDir": self.temp_dir,
+        }
+        
+        return connection_options
     
     def read_from_redshift(self, query: str) -> DataFrame:
         """Read data from Redshift using Glue connection with optimized settings"""
         try:
             self.logger.info(f"Executing query: {query[:100]}...")
             
-            # Use Glue's create_dynamic_frame_from_options for connection-based access
+            # Get connection options using the extract_jdbc_conf pattern
+            connection_options = self.get_redshift_connection_options(query)
+            
+            # Use Glue's create_dynamic_frame_from_options with connection options
             dynamic_frame = self.glue_context.create_dynamic_frame_from_options(
                 connection_type="redshift",
-                connection_options={
-                    "connectionName": self.connection_name,
-                    "query": query,
-                    "fetchsize": CONNECTION_CONFIG['fetchsize'],
-                    "batchsize": CONNECTION_CONFIG['batchsize']
-                },
+                connection_options=connection_options,
                 transformation_ctx="read_from_redshift"
             )
             
@@ -135,6 +147,24 @@ class PureSparkDataQuality:
             self.logger.error(f"Error reading from Redshift: {str(e)}")
             raise
     
+    def get_redshift_write_options(self, table_name: str) -> dict:
+        """Get Redshift write connection options using Glue connection"""
+        # Extract JDBC configuration from Glue connection
+        source_jdbc_conf = self.glue_context.extract_jdbc_conf(self.connection_name)
+        
+        full_table_name = f"{self.target_schema}.{table_name}"
+        
+        # Create write connection options
+        connection_options = {
+            "url": source_jdbc_conf.get('url'),
+            "dbtable": full_table_name,
+            "user": source_jdbc_conf.get('user'),
+            "password": source_jdbc_conf.get('password'),
+            "redshiftTmpDir": self.temp_dir,
+        }
+        
+        return connection_options
+    
     def write_to_redshift(self, df: DataFrame, table_name: str, mode: str = "append"):
         """Write DataFrame to Redshift using Glue connection with optimized batch processing"""
         try:
@@ -146,15 +176,14 @@ class PureSparkDataQuality:
                 df, self.glue_context, "dynamic_frame"
             )
             
+            # Get connection options using the extract_jdbc_conf pattern
+            connection_options = self.get_redshift_write_options(table_name)
+            
             # Write using Glue connection
             self.glue_context.write_dynamic_frame.from_options(
                 frame=dynamic_frame,
                 connection_type="redshift",
-                connection_options={
-                    "connectionName": self.connection_name,
-                    "dbtable": full_table_name,
-                    "batchsize": CONNECTION_CONFIG['batchsize']
-                },
+                connection_options=connection_options,
                 transformation_ctx="write_to_redshift"
             )
                 
@@ -732,7 +761,7 @@ def main():
     
     try:
         # Initialize data quality engine
-        dq_engine = PureSparkDataQuality(glue_context, args['JOB_NAME'], connection_name)
+        dq_engine = PureSparkDataQuality(glue_context, args['JOB_NAME'], connection_name, args['TempDir'])
         
         # Run data quality checks
         total_checks, total_duration = dq_engine.run_data_quality_checks(process_id)
