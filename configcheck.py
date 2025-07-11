@@ -8,6 +8,11 @@ Optimized for cloud-native performance and scalability.
 UPDATED: Modified to use AWS Glue connections instead of hardcoded JDBC parameters.
 Default connection: redshift-connection-dev2 (JDBC type)
 
+RECENT FIXES:
+- Fixed SQL GROUP BY error: Removed invalid string literals from GROUP BY clauses
+- Fixed DynamicFrame method calls: Updated to use correct underscore syntax
+- Integrated redshift_query function with direct JDBC connection validation
+
 Job Parameters:
 - JOB_NAME (required): Name of the Glue job
 - TempDir (required): S3 temporary directory for Redshift operations (e.g., s3://your-bucket/temp/)
@@ -204,7 +209,7 @@ class PureSparkDataQuality:
             self.logger.info(f"Writing {df.count()} records to {full_table_name}")
             
             # Convert DataFrame to DynamicFrame
-            dynamic_frame = self.glue_context.create_dynamic_frame.from_dataframe(
+            dynamic_frame = self.glue_context.create_dynamic_frame_from_dataframe(
                 df, self.glue_context, "dynamic_frame"
             )
             
@@ -212,7 +217,7 @@ class PureSparkDataQuality:
             connection_options = self.get_redshift_write_options(table_name)
             
             # Write using Glue connection
-            self.glue_context.write_dynamic_frame.from_options(
+            self.glue_context.write_dynamic_frame_from_options(
                 frame=dynamic_frame,
                 connection_type="redshift",
                 connection_options=connection_options,
@@ -303,7 +308,6 @@ class PureSparkDataQuality:
             SELECT '{column_name}' as column_name, 'NULL' as failing_value, COUNT(*) as null_count
             FROM {table_name} 
             WHERE {column_name} IS NULL
-            GROUP BY '{column_name}', 'NULL'
             LIMIT {self.max_detail_records}
             """
             
