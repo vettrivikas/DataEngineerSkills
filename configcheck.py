@@ -103,31 +103,59 @@ class PureSparkDataQuality:
         self.logger.info(f"Using Glue connection: {self.connection_name}")
         self.logger.info(f"Using temp directory: {self.temp_dir}")
     
-    def get_redshift_connection_options(self, query: str) -> dict:
-        """Get Redshift connection options using Glue connection"""
-        self.logger.info(f'Getting details for connection: {self.connection_name}')
+    def redshift_query(self, query: str, rs_db_name: str, glue_connection_name: str, glueContext: GlueContext, TempDir: str, sc: SparkContext) -> dict:
+        """Get Redshift connection options using Glue connection with direct JDBC validation"""
+        print(f'Getting details for connection: {glue_connection_name}')
         
-        # Extract JDBC configuration from Glue connection
-        source_jdbc_conf = self.glue_context.extract_jdbc_conf(self.connection_name)
+        source_jdbc_conf = glueContext.extract_jdbc_conf(glue_connection_name)
         
-        # Create connection options
-        connection_options = {
-            "url": source_jdbc_conf.get('url'),
+        from py4j.java_gateway import java_import
+        
+        java_import(sc._gateway.jvm, "java.sql.Connection")
+        java_import(sc._gateway.jvm, "java.sql.DatabaseMetaData")
+        java_import(sc._gateway.jvm, "java.sql.DriverManager")
+        java_import(sc._gateway.jvm, "java.sql.SQLException")
+        
+        conn = sc._gateway.jvm.DriverManager.getConnection(
+            source_jdbc_conf.get('url') + '/' + rs_db_name,
+            source_jdbc_conf.get('user'), 
+            source_jdbc_conf.get('password')
+        )
+        
+        print(f'Connected to {conn.getMetaData().getDatabaseProductName()}, {source_jdbc_conf.get("url")}/{rs_db_name}')
+        
+        my_conn_options = {
+            "url": source_jdbc_conf.get('url') + '/' + rs_db_name,
             "query": query,
             "user": source_jdbc_conf.get('user'),
             "password": source_jdbc_conf.get('password'),
-            "redshiftTmpDir": self.temp_dir,
+            "redshiftTmpDir": TempDir,
         }
         
-        return connection_options
+        return my_conn_options
     
-    def read_from_redshift(self, query: str) -> DataFrame:
+    def get_redshift_connection_options(self, query: str, rs_db_name: str = None) -> dict:
+        """Get Redshift connection options using the redshift_query function"""
+        # Use default database name if not provided
+        if rs_db_name is None:
+            rs_db_name = 'dev'  # Default database name
+        
+        return self.redshift_query(
+            query=query,
+            rs_db_name=rs_db_name,
+            glue_connection_name=self.connection_name,
+            glueContext=self.glue_context,
+            TempDir=self.temp_dir,
+            sc=self.glue_context.spark_session.sparkContext
+        )
+    
+    def read_from_redshift(self, query: str, rs_db_name: str = None) -> DataFrame:
         """Read data from Redshift using Glue connection with optimized settings"""
         try:
             self.logger.info(f"Executing query: {query[:100]}...")
             
-            # Get connection options using the extract_jdbc_conf pattern
-            connection_options = self.get_redshift_connection_options(query)
+            # Get connection options using the redshift_query function
+            connection_options = self.get_redshift_connection_options(query, rs_db_name)
             
             # Use Glue's create_dynamic_frame_from_options with connection options
             dynamic_frame = self.glue_context.create_dynamic_frame_from_options(
@@ -147,16 +175,20 @@ class PureSparkDataQuality:
             self.logger.error(f"Error reading from Redshift: {str(e)}")
             raise
     
-    def get_redshift_write_options(self, table_name: str) -> dict:
+    def get_redshift_write_options(self, table_name: str, rs_db_name: str = None) -> dict:
         """Get Redshift write connection options using Glue connection"""
+        # Use default database name if not provided
+        if rs_db_name is None:
+            rs_db_name = 'dev'  # Default database name
+            
         # Extract JDBC configuration from Glue connection
         source_jdbc_conf = self.glue_context.extract_jdbc_conf(self.connection_name)
         
         full_table_name = f"{self.target_schema}.{table_name}"
         
-        # Create write connection options
+        # Create write connection options with database name in URL
         connection_options = {
-            "url": source_jdbc_conf.get('url'),
+            "url": source_jdbc_conf.get('url') + '/' + rs_db_name,
             "dbtable": full_table_name,
             "user": source_jdbc_conf.get('user'),
             "password": source_jdbc_conf.get('password'),
@@ -779,6 +811,79 @@ def main():
     
     finally:
         job.commit()
+
+
+# Standalone redshift_query function for direct usage (outside of class)
+def redshift_query(query, rs_db_name, glue_connection_name, glueContext, TempDir, sc):
+    """
+    Standalone version of redshift_query function for direct usage
+    
+    Parameters:
+    - query: SQL query to execute
+    - rs_db_name: Redshift database name
+    - glue_connection_name: AWS Glue connection name
+    - glueContext: AWS Glue context
+    - TempDir: S3 temporary directory for Redshift operations
+    - sc: Spark context
+    
+    Returns:
+    - Dictionary with connection options for create_dynamic_frame_from_options
+    """
+    print(f'Getting details for connection: {glue_connection_name}')
+    
+    source_jdbc_conf = glueContext.extract_jdbc_conf(glue_connection_name)
+    
+    from py4j.java_gateway import java_import
+    
+    java_import(sc._gateway.jvm, "java.sql.Connection")
+    java_import(sc._gateway.jvm, "java.sql.DatabaseMetaData")
+    java_import(sc._gateway.jvm, "java.sql.DriverManager")
+    java_import(sc._gateway.jvm, "java.sql.SQLException")
+    
+    conn = sc._gateway.jvm.DriverManager.getConnection(
+        source_jdbc_conf.get('url') + '/' + rs_db_name,
+        source_jdbc_conf.get('user'), 
+        source_jdbc_conf.get('password')
+    )
+    
+    print(f'Connected to {conn.getMetaData().getDatabaseProductName()}, {source_jdbc_conf.get("url")}/{rs_db_name}')
+    
+    my_conn_options = {
+        "url": source_jdbc_conf.get('url') + '/' + rs_db_name,
+        "query": query,
+        "user": source_jdbc_conf.get('user'),
+        "password": source_jdbc_conf.get('password'),
+        "redshiftTmpDir": TempDir,
+    }
+    
+    return my_conn_options
+
+
+# Usage examples for the redshift_query function
+def example_usage():
+    """
+    Example usage of the redshift_query function for creating dynamic frames
+    This shows the exact pattern from the original code snippet
+    """
+    # Example variables (these would be defined in your actual script)
+    # explosion_query = "SELECT * FROM your_table"
+    # rs_db_name = "your_database"
+    # glue_connection_name = "your-glue-connection"
+    # TempDir = "s3://your-bucket/temp/"
+    
+    # Example 1: Using redshift_query function directly
+    # explosion_leaf_df = glueContext.create_dynamic_frame_from_options(
+    #     "redshift", 
+    #     redshift_query(explosion_query, rs_db_name, glue_connection_name, glueContext, TempDir, sc)
+    # ).toDF()
+    
+    # Example 2: Same pattern repeated (as shown in original code)
+    # explosion_leaf_df = glueContext.create_dynamic_frame_from_options(
+    #     "redshift", 
+    #     redshift_query(explosion_query, rs_db_name, glue_connection_name, glueContext, TempDir, sc)
+    # ).toDF()
+    
+    pass
 
 
 if __name__ == "__main__":
