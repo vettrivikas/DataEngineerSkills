@@ -40,12 +40,3 @@ def archivefile():
 
 
 
-Generate ORC Files: Email Glue job creates ORC files during processing.
-
-Trigger Lambda: ORC file creation triggers a Lambda function.
-
-Identify File: Lambda captures the new ORC file and extracts its filename.
-
-Send SQS Notification: Lambda sends a notification to Kyvos SQS using the filename.
-
-Automate via Airflow: The full process is managed through a generic Airflow DAG.
