@@ -57,4 +57,5 @@ conn.commit()
 conn.close()
 
 print("✅ Data loaded into Redshift successfully.")
+It looks like we are not using the data_date from the source table. Instead, we’re applying a static month rollover date to all dataframes fetched from the source. Because of this, the filter applied on the IFRS table is unnecessary—since, as per the current code logic and mapping, we are already treating all data as belonging to the current month’s rollover end date.
 #redshift_engine = create_engine("postgresql+psycopg2://%s:%s@%s:%d/%s" % (redshift_user,redshift_password,redshift_host,redshift_port,redshift_db))
