@@ -1,29 +1,38 @@
-from airflow import DAG
-from airflow.operators.python import PythonOperator
 from datetime import datetime
-import json
-
-def print_conf_params(**context):
-    dag_run_conf = context.get("dag_run").conf or {}
-    print("Received Config Params:")
-    print(json.dumps(dag_run_conf, indent=2))
-
-default_args = {
-    "owner": "airflow",
-    "start_date": datetime(2025, 1, 1),
-    "retries": 0
-}
+from airflow import DAG
+from airflow.providers.amazon.aws.operators.glue import GlueJobOperator
 
 with DAG(
-    dag_id="s3_lambda_triggered_dag",
-    default_args=default_args,
-    schedule_interval=None,  # Triggered manually or via API/Lambda
+    dag_id="recursion_suite_glue_trigger",
+    schedule_interval=None,  # Trigger manually or set cron expression
+    start_date=datetime(2023, 1, 1),
     catchup=False,
-    tags=["aws", "lambda", "s3"],
+    tags=["glue", "recursion_suite"],
 ) as dag:
 
-    print_conf = PythonOperator(
-        task_id="print_conf",
-        python_callable=print_conf_params,
-        provide_context=True,
+    first_glue_dev_job = GlueJobOperator(
+        task_id="first_glue_dev_job",
+        job_name="first_glue_dev_job",
+        region_name="ap-south-1",  # Change if needed
+        script_args={},  # Optional: {"--ENV": "dev"}
+        wait_for_completion=True,
     )
+
+    pre_glue_job = GlueJobOperator(
+        task_id="pre_glue_job",
+        job_name="pre_glue_job",
+        region_name="ap-south-1",
+        script_args={},
+        wait_for_completion=True,
+    )
+
+    post_glue_job = GlueJobOperator(
+        task_id="post_glue_job",
+        job_name="post_glue_job",
+        region_name="ap-south-1",
+        script_args={},
+        wait_for_completion=True,
+    )
+
+    # Execution order
+    first_glue_dev_job >> pre_glue_job >> post_glue_job
