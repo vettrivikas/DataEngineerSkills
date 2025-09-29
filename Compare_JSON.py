@@ -27,3 +27,10 @@ with open("prod_new.json", "w") as f:
     json.dump(prod_new_json, f, indent=4)
 
 print("prod_new.json has been created successfully!")
+
+
+
+# Python script to compare two TXT files (CSV-style rows with quotes).
+# Show which rows are misplaced (same row exists in both files but different line numbers).
+# Do not report mismatched rows, only misplaced.
+
