@@ -1,29 +1,32 @@
-import re
-import csv
+from airflow import DAG
+from airflow.providers.amazon.aws.operators.glue import AwsGlueJobOperator
+from datetime import datetime
 
-data = """
+default_args = {
+    'start_date': datetime(2025, 1, 1),
+    'catchup': False
+}
 
-"""
+# --- DAG 1 ---
+with DAG(
+    dag_id='glue_job1_dag',
+    default_args=default_args,
+    schedule_interval=None,
+) as dag1:
+    glue_job1 = AwsGlueJobOperator(
+        task_id='run_glue_job1',
+        job_name='your_glue_job1_name',  # replace with actual Glue job name
+        region_name='ap-south-1',        # your AWS region
+    )
 
-# Extract tuples using regex
-pattern = r"\('([^']*)','([^']*)','([^']*)','([^']*)',current_date\)"
-rows = re.findall(pattern, data)
-
-def convert_to_12hr(time_str):
-    h, m, s = map(int, time_str.split(":"))
-    suffix = "AM" if h < 12 else "PM"
-    h = h % 12 or 12
-    return f"{h}{suffix}"
-
-# Write to CSV
-with open("output.csv", "w", newline="") as f:
-    writer = csv.writer(f)
-    writer.writerow(["DB", "Table_Name", "Start_Time", "End_Time", "Summary"])
-    
-    for db, tbl, start, end in rows:
-        start12 = convert_to_12hr(start)
-        end12 = convert_to_12hr(end)
-        summary = f"{db} - {start12} to {end12}"
-        writer.writerow([db, tbl, start, end, summary])
-
-print("✅ Data successfully exported to output.csv")
+# --- DAG 2 ---
+with DAG(
+    dag_id='glue_job2_dag',
+    default_args=default_args,
+    schedule_interval=None,
+) as dag2:
+    glue_job2 = AwsGlueJobOperator(
+        task_id='run_glue_job2',
+        job_name='your_glue_job2_name',  # replace with actual Glue job name
+        region_name='ap-south-1',
+    )
