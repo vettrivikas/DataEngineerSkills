@@ -2,12 +2,7 @@ import re
 import csv
 
 data = """
-('BD3','INSTRUMENT_MASTER_RFDH','20:00:00','21:00:00',current_date),
-('BD4','IFRS_MANAGEMENT_BALANCES_RECON_VAR','13:00:00','14:00:00',current_date),
-('BD4','IFRS_MANAGEMENT_BALANCES_MRP','13:00:00','14:00:00',current_date),
-('BD3','IFRS_INTR_BALINC_RFDH','20:00:00','22:00:00',current_date),
-('BD3','PS_BMO_IRISK_R00_RFDH','20:00:00','22:00:00',current_date),
-('BD3','PS_FI_INSTR_F00_RFDH','20:00:00','22:00:00',current_date)
+
 """
 
 # Extract tuples using regex
