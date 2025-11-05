@@ -30,3 +30,11 @@ with DAG(
         job_name='your_glue_job2_name',  # replace with actual Glue job name
         region_name='ap-south-1',
     )
+
+
+
+column_specs = [('BDY_REC_TYPE':(3, str), 'FI_INSTRUMENT_ID':(30, str), ...
+...
+'FI_INITBAL_AMT': (19, int), 'FI_INTBAL_AMT': (19, int), 'FI_INITCMT_AMT': (19, int), 'FI_INTCMT_AMT': (19, int), 
+'FTP_TERM_MATURITY': (11, int), 'FI_PAYMENT_AMT': (19, int), 'FI_PAYMENT_BCE_AMT': (19, int), 'RATE_RESET_TYPE': (2, str), 
+'FI_INTEREST_RATE': (13, int), 'FI_PRINDX_MARGIN': (9, int), 'COUNTRY_SECTOR_CD': (10, str), ...
