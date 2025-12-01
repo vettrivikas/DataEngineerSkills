@@ -31,3 +31,24 @@ with DAG(
         region_name='ap-south-1',
     )
 
+
+import time
+import secrets
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+def unique_sleep_ms():
+    delay_ms = secrets.randbelow(30000) + 1000   # 1000–30000 ms (1–30s)
+    logging.info(f"Random sleep time selected: {delay_ms} ms")
+    time.sleep(delay_ms / 1000)
+    logging.info(f"Sleep completed after {delay_ms} ms")
+    return delay_ms
+
+slept = unique_sleep_ms()
+print(f"Slept for {slept} ms")
+
