@@ -1,3 +1,19 @@
+from airflow import DAG
+from airflow.providers.amazon.aws.operators.glue import AwsGlueWorkflowOperator
+from datetime import datetime
+
+with DAG(
+    dag_id="trigger_glue_workflow",
+    start_date=datetime(2024, 1, 1),
+    schedule_interval=None,
+    catchup=False,
+) as dag:
+
+    trigger_glue = AwsGlueWorkflowOperator(
+        task_id="start_glue_workflow",
+        workflow_name="my_glue_workflow",
+        aws_conn_id="aws_default"
+    )
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.providers.amazon.aws.hooks.glue import AwsGlueHook
