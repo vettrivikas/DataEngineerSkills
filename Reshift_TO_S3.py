@@ -1,73 +1,47 @@
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.sensors.python import PythonSensor
-from datetime import datetime
-import boto3
+import json
+import csv
 
-GLUE_WORKFLOW_NAME = "my_glue_workflow"
-AWS_REGION = "ap-south-1"
+INPUT_JSON = "AirflowExtractConfig.json"
+OUTPUT_CSV = "AirflowExtractConfig.csv"
 
-# ---------------------------
-# Trigger Glue Workflow
-# ---------------------------
-def trigger_glue_workflow(**context):
-    glue = boto3.client("glue", region_name=AWS_REGION)
-    response = glue.start_workflow_run(
-        Name=GLUE_WORKFLOW_NAME
-    )
-    run_id = response["RunId"]
-    context["ti"].xcom_push(key="run_id", value=run_id)
-    print("Triggered workflow RunId:", run_id)
+rows = []
+headers = set()
 
-# ---------------------------
-# Monitor Glue Workflow
-# ---------------------------
-def monitor_glue_workflow(**context):
-    run_id = context["ti"].xcom_pull(
-        task_ids="trigger_glue_workflow",
-        key="run_id"
-    )
+def flatten_json(obj, parent_key="", row=None):
+    if row is None:
+        row = {}
 
-    glue = boto3.client("glue", region_name=AWS_REGION)
-    response = glue.get_workflow_run(
-        Name=GLUE_WORKFLOW_NAME,
-        RunId=run_id,
-        IncludeGraph=False
-    )
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            flatten_json(v, f"{parent_key}{k}_", row)
 
-    status = response["Run"]["Status"]
-    print("Workflow status:", status)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            flatten_json(item, f"{parent_key}{i}_", row)
 
-    if status == "COMPLETED":
-        return True
-    if status in ["FAILED", "STOPPED", "ERROR"]:
-        raise Exception(f"Glue workflow failed: {status}")
+    else:
+        key = parent_key.rstrip("_")
+        row[key] = obj
+        headers.add(key)
 
-    return False  # still running
+    return row
 
-# ---------------------------
-# DAG Definition
-# ---------------------------
-with DAG(
-    dag_id="trigger_and_monitor_glue_workflow",
-    start_date=datetime(2024, 1, 1),
-    schedule_interval=None,
-    catchup=False,
-    tags=["aws", "glue", "workflow"],
-) as dag:
+# Load JSON
+with open(INPUT_JSON, "r") as f:
+    data = json.load(f)
 
-    trigger_workflow = PythonOperator(
-        task_id="trigger_glue_workflow",
-        python_callable=trigger_glue_workflow,
-        provide_context=True
-    )
+# Iterate DAGs
+for dag_group, dag_list in data.items():
+    for dag in dag_list:
+        row = {"dag_group": dag_group}
+        headers.add("dag_group")
+        flatten_json(dag, "", row)
+        rows.append(row)
 
-    monitor_workflow = PythonSensor(
-        task_id="monitor_glue_workflow",
-        python_callable=monitor_glue_workflow,
-        poke_interval=60,           # every 60 seconds
-        timeout=60 * 60 * 3,        # 3 hours
-        mode="poke"
-    )
+# Write CSV
+with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
+    writer = csv.DictWriter(f, fieldnames=sorted(headers))
+    writer.writeheader()
+    writer.writerows(rows)
 
-    trigger_workflow >> monitor_workflow
+print("✅ CSV file created:", OUTPUT_CSV)
