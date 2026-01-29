@@ -1,60 +1,65 @@
-import boto3
-import redshift_connector
-import csv
-from io import StringIO
+from datetime import datetime, timedelta
+from airflow import DAG
+from airflow.providers.amazon.aws.hooks.glue import AwsGlueHook
+from airflow.operators.python import PythonOperator
+from airflow.utils.dates import days_ago
+import time
+import logging
 
-# S3 and Redshift configs
-s3_bucket = 'your-s3-bucket'
-s3_key = 'your-folder/exported_data_pipe_delimited.csv'
-redshift_config = {
-    'host': 'your-redshift-cluster.amazonaws.com',
-    'database': 'your_db',
-    'user': 'your_user',
-    'password': 'your_password',
-    'port': 5439,
-    'table': 'your_schema.your_table'
-}
+# Define workflow name and AWS region
+GLUE_WORKFLOW_NAME = "Your_Glue_Workflow_Name"
+AWS_REGION = "us-east-1" # Replace with your region
 
-# Step 1: Read CSV from S3
-s3 = boto3.client('s3')
-response = s3.get_object(Bucket=s3_bucket, Key=s3_key)
-csv_content = response['Body'].read().decode('utf-8')
+def trigger_glue_workflow(**kwargs):
+    """
+    Triggers an AWS Glue Workflow and waits for its completion.
+    """
+    # Initialize the hook
+    glue_hook = AwsGlueHook(aws_conn_id='aws_default', region_name=AWS_REGION)
 
-# Step 2: Parse CSV
-csv_buffer = StringIO(csv_content)
-reader = csv.reader(csv_buffer, delimiter='|')
-header = next(reader)  # first row = column names
+    logging.info(f"Triggering Glue Workflow: {GLUE_WORKFLOW_NAME}")
+    # Start the workflow run
+    run_id = glue_hook.get_client().start_workflow_run(Name=GLUE_WORKFLOW_NAME)['RunId']
+    logging.info(f"Workflow run ID: {run_id}")
+    
+    # Push the run_id to XCom for potential use by other tasks
+    kwargs['ti'].xcom_push(key='workflow_run_id', value=run_id)
 
-# Step 3: Prepare insert statements
-rows = []
-for row in reader:
-    formatted = []
-    for value in row:
-        if value == '':
-            formatted.append("NULL")
-        else:
-            value = value.replace("'", "''")  # escape single quotes
-            formatted.append(f"'{value}'")
-    rows.append(f"({', '.join(formatted)})")
+    # Poll for the workflow status (implement or use a sensor for production)
+    # This is a basic polling example; a dedicated sensor is better for long-running processes
+    while True:
+        status = glue_hook.get_client().get_workflow_run(Name=GLUE_WORKFLOW_NAME, RunId=run_id)
+        run_state = status['Run']['WorkflowRunStatus']
+        logging.info(f"Current workflow state: {run_state}")
 
-# Chunk insert into batches (optional)
-insert_query = f"""
-    INSERT INTO {redshift_config['table']} ({', '.join(header)})
-    VALUES {',\n'.join(rows)};
-"""
+        if run_state in ['COMPLETED', 'FAILED', 'STOPPED']:
+            if run_state == 'COMPLETED':
+                logging.info("Workflow completed successfully.")
+                return run_id
+            else:
+                logging.error(f"Workflow failed or stopped with state: {run_state}")
+                raise Exception(f"Glue Workflow run {run_id} {run_state}")
+        
+        time.sleep(30) # Wait for 30 seconds before polling again
 
-# Step 4: Load into Redshift
-conn = redshift_connector.connect(
-    host=redshift_config['host'],
-    database=redshift_config['database'],
-    user=redshift_config['user'],
-    password=redshift_config['password'],
-    port=redshift_config['port']
-)
-cursor = conn.cursor()
-cursor.execute(insert_query)
-conn.commit()
-conn.close()
+with DAG(
+    dag_id='trigger_aws_glue_workflow_dag',
+    start_date=days_ago(1),
+    schedule_interval=None,
+    catchup=False,
+    dagrun_timeout=timedelta(minutes=120),
+    max_active_runs=1,
+    default_args={
+        'owner': 'airflow',
+        'depends_on_past': False,
+        'email_on_failure': False,
+        'email_on_retry': False,
+        'retries': 0 # Set retries to 0 to prevent infinite loops on failure
+    }
+) as dag:
 
-print("✅ Data loaded into Redshift successfully.")
-#redshift_engine = create_engine("postgresql+psycopg2://%s:%s@%s:%d/%s" % (redshift_user,redshift_password,redshift_host,redshift_port,redshift_db))
+    trigger_and_monitor_workflow = PythonOperator(
+        task_id='trigger_and_monitor_glue_workflow',
+        python_callable=trigger_glue_workflow,
+        provide_context=True # Allows access to task instance (ti) and XComs
+    )
