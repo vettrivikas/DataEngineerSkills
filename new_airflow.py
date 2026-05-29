@@ -1,73 +1,80 @@
-import boto3
+from datetime import datetime
+
 from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.utils.dates import days_ago
+from airflow.decorators import task, task_group
+from airflow.models.param import Param
+from airflow.operators.empty import EmptyOperator
 
-def generic_s3_crossbucket_copy(**kwargs):
-    s3 = boto3.client('s3')
-    lambda_client = boto3.client('lambda')
 
-    # Read inputs
-    source_bucket = kwargs['dag_run'].conf.get('source_bucket')
-    target_bucket = kwargs['dag_run'].conf.get('target_bucket')
-    src_raw = kwargs['dag_run'].conf.get('source_keys')
-    dst_raw = kwargs['dag_run'].conf.get('dest_keys')
-    lambda_function_name = kwargs['dag_run'].conf.get('lambda_function_name')
+with DAG(
+    dag_id="dynamic_dependency_dag",
+    start_date=datetime(2025, 1, 1),
+    schedule=None,
+    catchup=False,
+    params={
+        "table_name": Param(
+            default="",
+            type="string",
+            title="Table Name"
+        )
+    },
+) as dag:
 
-    # Normalize to lists
-    source_keys = [src_raw] if isinstance(src_raw, str) else src_raw
-    dest_keys = [dst_raw] if isinstance(dst_raw, str) else dst_raw
+    @task
+    def audit_task():
+        print("Audit started")
 
-    if not (source_keys and dest_keys) or len(source_keys) != len(dest_keys):
-        raise ValueError("source_keys and dest_keys must be non-empty and of equal length")
+    @task
+    def glue_job(table_name):
+        print(f"Running glue job for table: {table_name}")
 
-    for src, dst in zip(source_keys, dest_keys):
-        src = src.strip()
-        dst = dst.rstrip('/') + '/'
+    @task
+    def get_dependency_list(table_name):
+        """
+        Call your function here.
+        Function should return list of dicts.
+        """
 
-        # Auto-detect folder
-        folder_prefix = src if src.endswith('/') else src + '/'
-        result = s3.list_objects_v2(Bucket=source_bucket, Prefix=folder_prefix, MaxKeys=1)
-        is_folder = 'Contents' in result and result['Contents']
+        return [
+            {
+                "table_name": "customer",
+                "job_name": "customer_job"
+            },
+            {
+                "table_name": "orders",
+                "job_name": "orders_job"
+            },
+            {
+                "table_name": "products",
+                "job_name": "products_job"
+            }
+        ]
 
-        if is_folder:
-            paginator = s3.get_paginator('list_objects_v2')
-            for page in paginator.paginate(Bucket=source_bucket, Prefix=folder_prefix):
-                for obj in page.get('Contents', []):
-                    skey = obj['Key']
-                    if skey.endswith('/'):
-                        continue
-                    dkey = skey.replace(folder_prefix, dst, 1)
-                    s3.copy_object(
-                        Bucket=target_bucket,
-                        CopySource={'Bucket': source_bucket, 'Key': skey},
-                        Key=dkey
-                    )
-                    print(f"[folder] Copied {skey} → {dkey}")
-                    if dkey.endswith('.pgp'):
-                        trigger_lambda(lambda_client, lambda_function_name, target_bucket, dkey)
-        else:
-            # File copy
-            file_name = src.split('/')[-1]
-            dest_key = f"{dst}{file_name}"
-            s3.copy_object(
-                Bucket=target_bucket,
-                CopySource={'Bucket': source_bucket, 'Key': src},
-                Key=dest_key
-            )
-            print(f"[file] Copied {src} → {dest_key}")
-            if dest_key.endswith('.pgp'):
-                trigger_lambda(lambda_client, lambda_function_name, target_bucket, dest_key)
+    @task_group(group_id="process_item")
+    def process_item(item):
 
-def trigger_lambda(lambda_client, lambda_function_name, bucket, key):
-    payload = {
-        "bucket": bucket,
-        "key": key
-    }
-    print(f"Invoking Lambda {lambda_function_name} for decryption → {key}")
-    response = lambda_client.invoke(
-        FunctionName=lambda_function_name,
-        InvocationType='Event',  # async
-        Payload=str(payload).encode('utf-8')
+        dummy_task = EmptyOperator(
+            task_id="dummy_task"
+        )
+
+        dummy_task_1 = EmptyOperator(
+            task_id="dummy_task_1"
+        )
+
+        dummy_task >> dummy_task_1
+
+    audit = audit_task()
+
+    glue = glue_job(
+        "{{ params.table_name }}"
     )
-    print(f"Lambda invoke status: {response['StatusCode']}")
+
+    dependency_list = get_dependency_list(
+        "{{ params.table_name }}"
+    )
+
+    dynamic_group = process_item.expand(
+        item=dependency_list
+    )
+
+    audit >> glue >> dependency_list >> dynamic_group
