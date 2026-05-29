@@ -1,80 +1,67 @@
 from datetime import datetime
+
 from airflow import DAG
-from airflow.decorators import task
+from airflow.decorators import task, task_group
 from airflow.models.param import Param
-from airflow.utils.task_group import task_group
 from airflow.operators.empty import EmptyOperator
 
 
 CONFIG = {
     "cde": [
-        {
-            "flagName": "file1",
-            "fileName": "cde_file1.csv"
-        },
-        {
-            "flagName": "file2",
-            "fileName": "cde_file2.csv"
-        }
+        {"file_name": "file1"},
+        {"file_name": "file2"}
     ],
     "pw": [
-        {
-            "flagName": "file1",
-            "fileName": "pw_file1.csv"
-        },
-        {
-            "flagName": "file2",
-            "fileName": "pw_file2.csv"
-        },
-        {
-            "flagName": "file3",
-            "fileName": "pw_file3.csv"
-        }
+        {"file_name": "file1"},
+        {"file_name": "file2"},
+        {"file_name": "file3"}
     ],
     "iw": [
-        {
-            "flagName": "file1",
-            "fileName": "iw_file1.csv"
-        }
+        {"file_name": "file1"}
     ]
 }
 
 
 with DAG(
-    dag_id="dynamic_dq_encryption",
+    dag_id="dynamic_mapping_test",
     start_date=datetime(2025, 1, 1),
     catchup=False,
     schedule=None,
     params={
         "table_name": Param(
-            "",
-            type="string",
-            description="Table Name"
+            default="cde",
+            type="string"
         )
     }
 ) as dag:
 
-    start = EmptyOperator(task_id="start")
+    start = EmptyOperator(
+        task_id="start"
+    )
 
-    end = EmptyOperator(task_id="end")
+    end = EmptyOperator(
+        task_id="end"
+    )
 
     @task
     def insert_audit():
-        print("Audit inserted")
+        print("Audit Inserted")
 
     @task
     def standalone_glue(table_name):
         print(
-            f"Running standalone glue job for {table_name}"
+            f"Standalone Glue Running for {table_name}"
         )
         return table_name
 
     @task
-    def get_outputs(table_name):
+    def get_files(table_name):
+
+        print(f"Selected Table = {table_name}")
 
         if table_name not in CONFIG:
             raise Exception(
-                f"{table_name} not found"
+                f"{table_name} not found in config"
             )
 
         return CONFIG[table_name]
@@ -86,16 +73,16 @@ with DAG(
         def dq(file_cfg):
 
             print(
-                f"DQ started : "
-                f"{file_cfg['fileName']}"
+                f"DQ Started : "
+                f"{file_cfg['file_name']}"
             )
 
         @task
         def encryption(file_cfg):
 
             print(
-                f"Encryption started : "
-                f"{file_cfg['fileName']}"
+                f"Encryption Started : "
+                f"{file_cfg['file_name']}"
             )
 
         dq_task = dq(file_cfg)
@@ -104,16 +91,16 @@ with DAG(
 
         dq_task >> enc_task
 
-    audit_task = insert_audit()
+    audit = insert_audit()
 
     table_name = standalone_glue(
         "{{ params.table_name }}"
     )
 
-    file_configs = get_outputs(table_name)
+    files = get_files(table_name)
 
-    process_file.expand(
-        file_cfg=file_configs
+    mapped_tasks = process_file.expand(
+        file_cfg=files
     )
 
-    start >> audit_task >> table_name >> file_configs
+    start >> audit >> table_name >> files >> mapped_tasks >> end
