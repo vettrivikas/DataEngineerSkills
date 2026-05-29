@@ -1,82 +1,119 @@
 from datetime import datetime
-
 from airflow import DAG
 from airflow.decorators import task
 from airflow.models.param import Param
+from airflow.utils.task_group import task_group
 from airflow.operators.empty import EmptyOperator
 
 
 CONFIG = {
     "cde": [
-        {"file_name": "file1"},
-        {"file_name": "file2"}
+        {
+            "flagName": "file1",
+            "fileName": "cde_file1.csv"
+        },
+        {
+            "flagName": "file2",
+            "fileName": "cde_file2.csv"
+        }
     ],
     "pw": [
-        {"file_name": "file1"},
-        {"file_name": "file2"},
-        {"file_name": "file3"}
+        {
+            "flagName": "file1",
+            "fileName": "pw_file1.csv"
+        },
+        {
+            "flagName": "file2",
+            "fileName": "pw_file2.csv"
+        },
+        {
+            "flagName": "file3",
+            "fileName": "pw_file3.csv"
+        }
     ],
     "iw": [
-        {"file_name": "file1"}
+        {
+            "flagName": "file1",
+            "fileName": "iw_file1.csv"
+        }
     ]
 }
 
 
 with DAG(
-    dag_id="dynamic_encryption_dq_test",
+    dag_id="dynamic_dq_encryption",
     start_date=datetime(2025, 1, 1),
     catchup=False,
     schedule=None,
     params={
-        "table_name": Param("cde", type="string")
-    },
-    tags=["test"],
+        "table_name": Param(
+            "",
+            type="string",
+            description="Table Name"
+        )
+    }
 ) as dag:
 
-    @task
-    def get_file_configs(**context):
+    start = EmptyOperator(task_id="start")
 
-        table_name = context["params"]["table_name"]
+    end = EmptyOperator(task_id="end")
+
+    @task
+    def insert_audit():
+        print("Audit inserted")
+
+    @task
+    def standalone_glue(table_name):
+        print(
+            f"Running standalone glue job for {table_name}"
+        )
+        return table_name
+
+    @task
+    def get_outputs(table_name):
 
         if table_name not in CONFIG:
             raise Exception(
-                f"Table '{table_name}' not found in config"
+                f"{table_name} not found"
             )
 
-        result = []
+        return CONFIG[table_name]
 
-        for file_cfg in CONFIG[table_name]:
-            result.append(
-                {
-                    "table_name": table_name,
-                    "file_name": file_cfg["file_name"]
-                }
+    @task_group
+    def process_file(file_cfg):
+
+        @task
+        def dq(file_cfg):
+
+            print(
+                f"DQ started : "
+                f"{file_cfg['fileName']}"
             )
 
-        print(f"Selected table: {table_name}")
-        print(f"Files: {result}")
+        @task
+        def encryption(file_cfg):
 
-        return result
+            print(
+                f"Encryption started : "
+                f"{file_cfg['fileName']}"
+            )
 
-    # Audit Task
-    insert_audit = EmptyOperator(
-        task_id="insert_audit"
+        dq_task = dq(file_cfg)
+
+        enc_task = encryption(file_cfg)
+
+        dq_task >> enc_task
+
+    audit_task = insert_audit()
+
+    table_name = standalone_glue(
+        "{{ params.table_name }}"
     )
 
-    file_configs = get_file_configs()
+    file_configs = get_outputs(table_name)
 
-    # Dynamic Encryption Tasks
-    encrypt_files = EmptyOperator.partial(
-        task_id="encrypt_file"
-    ).expand(
-        op_args=file_configs
+    process_file.expand(
+        file_cfg=file_configs
     )
 
-    # Dynamic DQ Tasks
-    dq_files = EmptyOperator.partial(
-        task_id="dq_file"
-    ).expand(
-        op_args=file_configs
-    )
-
-    insert_audit >> file_configs >> encrypt_files >> dq_files
+    start >> audit_task >> table_name >> file_configs
