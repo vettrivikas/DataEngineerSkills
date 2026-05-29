@@ -1,47 +1,82 @@
-from airflow import DAG
-from airflow.decorators import task
 from datetime import datetime
 
+from airflow import DAG
+from airflow.decorators import task
+from airflow.models.param import Param
+from airflow.operators.empty import EmptyOperator
+
+
+CONFIG = {
+    "cde": [
+        {"file_name": "file1"},
+        {"file_name": "file2"}
+    ],
+    "pw": [
+        {"file_name": "file1"},
+        {"file_name": "file2"},
+        {"file_name": "file3"}
+    ],
+    "iw": [
+        {"file_name": "file1"}
+    ]
+}
+
+
 with DAG(
-    dag_id="runtime_dynamic_tasks",
+    dag_id="dynamic_encryption_dq_test",
     start_date=datetime(2025, 1, 1),
-    schedule=None,
     catchup=False,
+    schedule=None,
+    params={
+        "table_name": Param("cde", type="string")
+    },
+    tags=["test"],
 ) as dag:
 
     @task
-    def glue_job(table_name):
-        print(f"Running glue for {table_name}")
+    def get_file_configs(**context):
 
-    @task
-    def get_config(table_name):
-        # Read S3 config here
+        table_name = context["params"]["table_name"]
 
-        if table_name == "customer":
-            return [
-                {"job_name": "job1"},
-                {"job_name": "job2"},
-                {"job_name": "job3"},
-            ]
+        if table_name not in CONFIG:
+            raise Exception(
+                f"Table '{table_name}' not found in config"
+            )
 
-        elif table_name == "orders":
-            return [
-                {"job_name": "job1"},
-            ]
+        result = []
 
-        return [
-            {"job_name": "job1"},
-            {"job_name": "job2"},
-        ]
+        for file_cfg in CONFIG[table_name]:
+            result.append(
+                {
+                    "table_name": table_name,
+                    "file_name": file_cfg["file_name"]
+                }
+            )
 
-    @task(map_index_template="{{ job_name }}")
-    def process_item(item):
-        print(f"Processing {item}")
+        print(f"Selected table: {table_name}")
+        print(f"Files: {result}")
 
-    glue = glue_job("{{ params.table_name }}")
+        return result
 
-    items = get_config("{{ params.table_name }}")
+    # Audit Task
+    insert_audit = EmptyOperator(
+        task_id="insert_audit"
+    )
 
-    mapped_tasks = process_item.expand(item=items)
+    file_configs = get_file_configs()
 
-    glue >> items >> mapped_tasks
+    # Dynamic Encryption Tasks
+    encrypt_files = EmptyOperator.partial(
+        task_id="encrypt_file"
+    ).expand(
+        op_args=file_configs
+    )
+
+    # Dynamic DQ Tasks
+    dq_files = EmptyOperator.partial(
+        task_id="dq_file"
+    ).expand(
+        op_args=file_configs
+    )
+
+    insert_audit >> file_configs >> encrypt_files >> dq_files
