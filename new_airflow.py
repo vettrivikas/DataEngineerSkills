@@ -1,80 +1,47 @@
+from airflow import DAG
+from airflow.decorators import task
 from datetime import datetime
 
-from airflow import DAG
-from airflow.decorators import task, task_group
-from airflow.models.param import Param
-from airflow.operators.empty import EmptyOperator
-
-
 with DAG(
-    dag_id="dynamic_dependency_dag",
+    dag_id="runtime_dynamic_tasks",
     start_date=datetime(2025, 1, 1),
     schedule=None,
     catchup=False,
-    params={
-        "table_name": Param(
-            default="",
-            type="string",
-            title="Table Name"
-        )
-    },
 ) as dag:
 
     @task
-    def audit_task():
-        print("Audit started")
-
-    @task
     def glue_job(table_name):
-        print(f"Running glue job for table: {table_name}")
+        print(f"Running glue for {table_name}")
 
     @task
-    def get_dependency_list(table_name):
-        """
-        Call your function here.
-        Function should return list of dicts.
-        """
+    def get_config(table_name):
+        # Read S3 config here
+
+        if table_name == "customer":
+            return [
+                {"job_name": "job1"},
+                {"job_name": "job2"},
+                {"job_name": "job3"},
+            ]
+
+        elif table_name == "orders":
+            return [
+                {"job_name": "job1"},
+            ]
 
         return [
-            {
-                "table_name": "customer",
-                "job_name": "customer_job"
-            },
-            {
-                "table_name": "orders",
-                "job_name": "orders_job"
-            },
-            {
-                "table_name": "products",
-                "job_name": "products_job"
-            }
+            {"job_name": "job1"},
+            {"job_name": "job2"},
         ]
 
-    @task_group(group_id="process_item")
+    @task(map_index_template="{{ job_name }}")
     def process_item(item):
+        print(f"Processing {item}")
 
-        dummy_task = EmptyOperator(
-            task_id="dummy_task"
-        )
+    glue = glue_job("{{ params.table_name }}")
 
-        dummy_task_1 = EmptyOperator(
-            task_id="dummy_task_1"
-        )
+    items = get_config("{{ params.table_name }}")
 
-        dummy_task >> dummy_task_1
+    mapped_tasks = process_item.expand(item=items)
 
-    audit = audit_task()
-
-    glue = glue_job(
-        "{{ params.table_name }}"
-    )
-
-    dependency_list = get_dependency_list(
-        "{{ params.table_name }}"
-    )
-
-    dynamic_group = process_item.expand(
-        item=dependency_list
-    )
-
-    audit >> glue >> dependency_list >> dynamic_group
+    glue >> items >> mapped_tasks
