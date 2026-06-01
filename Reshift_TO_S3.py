@@ -1,47 +1,36 @@
 import json
-import csv
 
-INPUT_JSON = "AirflowExtractConfig.json"
-OUTPUT_CSV = "AirflowExtractConfig.csv"
+# Read Airflow config
+with open("AirflowExtractConfig.json", "r") as f:
+    airflow_data = json.load(f)
 
-rows = []
-headers = set()
+# Read Standalone config
+with open("standaloneConfig.txt", "r") as f:
+    standalone_data = json.load(f)
 
-def flatten_json(obj, parent_key="", row=None):
-    if row is None:
-        row = {}
+# Build mapping: dag_id -> flagName
+flag_mapping = {}
 
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            flatten_json(v, f"{parent_key}{k}_", row)
-
-    elif isinstance(obj, list):
-        for i, item in enumerate(obj):
-            flatten_json(item, f"{parent_key}{i}_", row)
-
-    else:
-        key = parent_key.rstrip("_")
-        row[key] = obj
-        headers.add(key)
-
-    return row
-
-# Load JSON
-with open(INPUT_JSON, "r") as f:
-    data = json.load(f)
-
-# Iterate DAGs
-for dag_group, dag_list in data.items():
+for dag_list in airflow_data.values():
     for dag in dag_list:
-        row = {"dag_group": dag_group}
-        headers.add("dag_group")
-        flatten_json(dag, "", row)
-        rows.append(row)
+        dag_id = dag.get("dag_id")
 
-# Write CSV
-with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
-    writer = csv.DictWriter(f, fieldnames=sorted(headers))
-    writer.writeheader()
-    writer.writerows(rows)
+        for arg in dag.get("Arguments", []):
+            flag_name = arg.get("flagName")
 
-print("✅ CSV file created:", OUTPUT_CSV)
+            if dag_id and flag_name:
+                flag_mapping[dag_id] = flag_name
+
+# Update standalone config
+for extract in standalone_data.get("extracts", []):
+    table_name = extract.get("tableName")
+
+    if table_name in flag_mapping:
+        for output in extract.get("Output", []):
+            output["flagName"] = flag_mapping[table_name]
+
+# Write back
+with open("standaloneConfig.txt", "w") as f:
+    json.dump(standalone_data, f, indent=4)
+
+print("Standalone config updated successfully")
