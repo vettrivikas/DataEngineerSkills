@@ -300,6 +300,7 @@ def create_dag(p, snap):
                     on_failure_callback=partial(update_failure, failure_reason="EXTRACT_ENCRYPTION_FAILED",
                                                 job_name="EncryptionLambda",
                                                 stage_value="L2 STAGING to OUTBOUND"))
+               
                 if dq_flag == "TRUE":
                     dq_id = f"DQGeneration_{a['task']}"
                     dq_t = GlueJobOperator(
