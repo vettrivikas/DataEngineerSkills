@@ -6,7 +6,7 @@ from airflow.datasets import Dataset
 from airflow.models.dag import DAG
 from airflow.operators.bash import BashOperator
 
-# [START dataset_def]
+# [START dataset_def
 dag1_dataset = Dataset("s3://dag1/output_1.txt", extra={"hi": "bye"})
 # [END dataset_def]
 dag2_dataset = Dataset("s3://dag2/output_1.txt", extra={"hi": "bye"})
