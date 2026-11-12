@@ -19,7 +19,7 @@ def merge_json(preprd, pre_prod):
 preprd_json = load_json("preprd.json")
 pre_prod_json = load_json("pre_prod.json")
 
-# Merge JSON
+
 prod_new_json = merge_json(preprd_json, pre_prod_json)
 
 # Save to prod_new.json
