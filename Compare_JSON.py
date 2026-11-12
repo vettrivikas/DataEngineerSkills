@@ -6,7 +6,7 @@ def load_json(file_path):
 
 def merge_json(preprd, pre_prod):
     # Start with preprd.json data
-    prod_new = preprd.copy()
+    prod_new = preprd.copy()  
 
     # Add missing keys from pre_prod.json
     for key, value in pre_prod.items():
